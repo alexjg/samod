@@ -1,0 +1,29 @@
+[package]
+name = "samod-core"
+version = "0.1.0"
+edition = "2024"
+repository = "https://github.com/alexjg/samod"
+authors = ["Alex Good <alex@patternist.xyz>"]
+description = "the core library for the samod automerge-repo implementation"
+license = "MIT"
+
+[dependencies]
+base64 = "0.21"
+futures = "0.3.31"
+tracing = "0.1.41"
+uuid = { version = "1.0", features = ["v4", "serde"] }
+rand = "0.9"
+automerge = "0.6.1"
+serde = { version = "1.0", features = ["derive"] }
+hex = "0.4"
+minicbor = { version = "1.0.0", features = ["std"] }
+thiserror = "2.0.12"
+bs58 = { version = "0.5.1", features = ["check"] }
+sha2 = "0.10.9"
+
+[lib]
+
+[dev-dependencies]
+tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
+tokio = { version = "1.0", features = ["macros", "rt-multi-thread"] }
+samod-test-harness = { path = "../samod-test-harness" }

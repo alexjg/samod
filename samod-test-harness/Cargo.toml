@@ -1,0 +1,14 @@
+[package]
+name = "samod-test-harness"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+automerge = "0.6.1"
+rand = "0.9.1"
+samod-core = { path = "../samod-core" }
+tracing = "0.1.41"
+
+[lib]
+
+pulish = false
