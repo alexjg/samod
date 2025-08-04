@@ -15,7 +15,7 @@ use futures::channel::oneshot;
 
 use super::{Command, CommandId, CommandResult, task_context::TaskContext};
 
-pub(crate) async fn handle_command<R: rand::Rng + Clone>(
+pub(crate) async fn handle_command<R: rand::Rng + Send + Clone>(
     ctx: TaskContext<R>,
     command_id: CommandId,
     command: Command,
@@ -36,7 +36,7 @@ pub(crate) async fn handle_command<R: rand::Rng + Clone>(
     }
 }
 
-async fn handle_create_connection<R: rand::Rng + Clone>(
+async fn handle_create_connection<R: rand::Rng + Send + Clone>(
     ctx: TaskContext<R>,
     direction: ConnDirection,
 ) -> CommandResult {
@@ -62,7 +62,7 @@ async fn handle_create_connection<R: rand::Rng + Clone>(
     CommandResult::CreateConnection { connection_id }
 }
 
-async fn handle_receive<R: rand::Rng + Clone>(
+async fn handle_receive<R: rand::Rng + Send + Clone>(
     ctx: TaskContext<R>,
     connection_id: ConnectionId,
     msg: Vec<u8>,
@@ -160,7 +160,7 @@ async fn handle_receive<R: rand::Rng + Clone>(
     }
 }
 
-async fn handle_doc_message<R: rand::Rng + Clone>(
+async fn handle_doc_message<R: rand::Rng + Send + Clone>(
     ctx: TaskContext<R>,
     connection_id: ConnectionId,
     target_id: PeerId,
@@ -188,7 +188,7 @@ async fn handle_doc_message<R: rand::Rng + Clone>(
 }
 
 #[tracing::instrument(skip(ctx, init_doc), fields(command_id = %command_id))]
-async fn handle_create_document<R: rand::Rng + Clone>(
+async fn handle_create_document<R: rand::Rng + Send + Clone>(
     mut ctx: TaskContext<R>,
     command_id: CommandId,
     init_doc: Automerge,
@@ -215,7 +215,7 @@ async fn handle_create_document<R: rand::Rng + Clone>(
 }
 
 #[tracing::instrument(skip(ctx), fields(document_id = %document_id))]
-async fn handle_find_document<R: rand::Rng + Clone>(
+async fn handle_find_document<R: rand::Rng + Send + Clone>(
     ctx: TaskContext<R>,
     command_id: CommandId,
     document_id: DocumentId,
@@ -273,7 +273,7 @@ async fn handle_find_document<R: rand::Rng + Clone>(
     })
 }
 
-async fn spawn_actor<R: rand::Rng + Clone>(
+async fn spawn_actor<R: rand::Rng + Send + Clone>(
     ctx: TaskContext<R>,
     document_id: DocumentId,
     initial_doc: Option<Automerge>,

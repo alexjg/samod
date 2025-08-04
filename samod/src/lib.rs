@@ -10,6 +10,7 @@ use futures::{
     channel::{mpsc, oneshot},
     stream::FuturesUnordered,
 };
+use rand::rand_core::UnwrapErr;
 use samod_core::{
     CommandId, CommandResult, ConnectionId, DocumentActorId, LoaderState, UnixTimestamp,
     actors::{
@@ -90,7 +91,7 @@ impl Samod {
             peer_id,
             announce_policy,
         } = builder;
-        let mut rng = rand::rng();
+        let mut rng = UnwrapErr(rand::rngs::OsRng);
         let peer_id = peer_id.unwrap_or_else(|| PeerId::new_with_rng(&mut rng));
         let mut loading = Hub::load(rng, UnixTimestamp::now(), peer_id.clone());
         let mut running_tasks = FuturesUnordered::new();
@@ -539,9 +540,15 @@ mod tests {
 
     fn assert_send<S: Send>(_s: PhantomData<S>) {}
 
+    #[cfg(feature = "tokio")]
+    fn assert_send_value<S: Send>(_s: impl Fn() -> S) {}
+
     #[test]
     fn make_sure_it_is_send() {
         assert_send::<super::storage::InMemoryStorage>(PhantomData);
-        assert_send::<super::Samod>(PhantomData)
+        assert_send::<super::Samod>(PhantomData);
+
+        #[cfg(feature = "tokio")]
+        assert_send_value(|| crate::Samod::build_tokio().load());
     }
 }

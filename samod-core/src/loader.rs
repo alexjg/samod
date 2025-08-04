@@ -1,4 +1,4 @@
-use std::{cell::RefCell, rc::Rc};
+use std::sync::{Arc, Mutex};
 
 use crate::{
     PeerId, UnixTimestamp,
@@ -56,7 +56,7 @@ pub enum LoaderState {
     Loaded(Hub),
 }
 
-impl<R: rand::Rng + Clone + 'static> SamodLoader<R> {
+impl<R: rand::Rng + Clone + Send + Sync + 'static> SamodLoader<R> {
     /// Creates a new samod loader.
     ///
     /// # Arguments
@@ -93,7 +93,7 @@ impl<R: rand::Rng + Clone + 'static> SamodLoader<R> {
                 complete: (hub_state, rng),
             } => {
                 assert!(results.is_empty());
-                let state = Rc::new(RefCell::new(hub_state));
+                let state = Arc::new(Mutex::new(hub_state));
                 let hub = Hub::new(rng, now, state);
                 return LoaderState::Loaded(hub);
             }

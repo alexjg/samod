@@ -1,4 +1,7 @@
-use std::{cell::RefCell, collections::HashMap, rc::Rc};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+};
 
 use crate::{
     ConnectionId, DocumentActorId, DocumentId, PeerId, UnixTimestamp,
@@ -51,14 +54,14 @@ use super::{Hub, State, run::HubOutput};
 /// serially within the main event loop, making `RefCell` safe for interior mutability
 /// without the overhead of `Mutex`.
 #[derive(Clone)]
-pub(crate) struct TaskContext<R: rand::Rng + Clone> {
-    now: Rc<RefCell<UnixTimestamp>>,
-    state: Rc<RefCell<State>>,
+pub(crate) struct TaskContext<R: rand::Rng + Send + Clone> {
+    now: Arc<Mutex<UnixTimestamp>>,
+    state: Arc<Mutex<State>>,
     io: ActorIo<Hub>,
     rng: R,
 }
 
-impl<R: rand::Rng + Clone> TaskContext<R> {
+impl<R: rand::Rng + Send + Clone> TaskContext<R> {
     /// Creates a new TaskContext with the given shared resources.
     ///
     /// This constructor is typically called by the `Driver` when setting up
@@ -71,9 +74,9 @@ impl<R: rand::Rng + Clone> TaskContext<R> {
     /// * `state` - Shared reference to the system state
     pub(crate) fn new(
         rng: R,
-        now: Rc<RefCell<UnixTimestamp>>,
+        now: Arc<Mutex<UnixTimestamp>>,
         io: ActorIo<Hub>,
-        state: Rc<RefCell<State>>,
+        state: Arc<Mutex<State>>,
     ) -> Self {
         Self {
             rng,
@@ -99,7 +102,7 @@ impl<R: rand::Rng + Clone> TaskContext<R> {
     /// ctx.state().add_connection_id(new_connection_id);
     /// ```
     pub(crate) fn state(&self) -> StateAccess<'_> {
-        StateAccess::new(*self.now.borrow(), self.io(), &self.state)
+        StateAccess::new(*self.now.lock().unwrap(), self.io(), &self.state)
     }
 
     /// Provides access to IO operations.
@@ -122,7 +125,7 @@ impl<R: rand::Rng + Clone> TaskContext<R> {
 
     /// Returns the current timestamp.
     pub(crate) fn now(&self) -> UnixTimestamp {
-        *self.now.borrow()
+        *self.now.lock().unwrap()
     }
 
     pub(crate) fn rng(&mut self) -> &mut R {
@@ -186,7 +189,7 @@ impl<R: rand::Rng + Clone> TaskContext<R> {
         &self,
         connection_id: crate::ConnectionId,
     ) {
-        for actor_info in self.state.borrow().document_actors() {
+        for actor_info in self.state.lock().unwrap().document_actors() {
             self.io.emit_event(HubOutput::SendToActor {
                 actor_id: actor_info.actor_id,
                 message: HubToDocMsgPayload::ConnectionClosed { connection_id },
@@ -229,7 +232,7 @@ impl<R: rand::Rng + Clone> TaskContext<R> {
         connection_id: crate::ConnectionId,
         error: String,
     ) {
-        let Some(connection) = self.state.borrow_mut().remove_connection(&connection_id) else {
+        let Some(connection) = self.state.lock().unwrap().remove_connection(&connection_id) else {
             tracing::warn!(
                 ?connection_id,
                 "attempting to fail a connection that does not exist"
@@ -250,7 +253,12 @@ impl<R: rand::Rng + Clone> TaskContext<R> {
         to_connections: Vec<ConnectionId>,
         msg: Broadcast,
     ) {
-        let Some(doc_id) = self.state.borrow().find_document_for_actor(&from_actor) else {
+        let Some(doc_id) = self
+            .state
+            .lock()
+            .unwrap()
+            .find_document_for_actor(&from_actor)
+        else {
             tracing::warn!(
                 ?from_actor,
                 "attempting to broadcast from an actor that does not exist"
@@ -260,8 +268,8 @@ impl<R: rand::Rng + Clone> TaskContext<R> {
         let OutgoingSessionDetails {
             counter,
             session_id,
-        } = self.state.borrow_mut().next_ephemeral_msg_details();
-        let state = self.state.borrow();
+        } = self.state.lock().unwrap().next_ephemeral_msg_details();
+        let state = self.state.lock().unwrap();
 
         for conn_id in to_connections {
             let Some(conn) = state.get_connection(&conn_id) else {
