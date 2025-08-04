@@ -1,9 +1,6 @@
-use std::path::PathBuf;
-
-use samod_core::StorageKey;
-
-pub fn key_to_path(key: &StorageKey) -> PathBuf {
-    let mut result = PathBuf::new();
+#[cfg(any(feature = "tokio", feature = "gio"))]
+pub fn key_to_path(key: &samod_core::StorageKey) -> std::path::PathBuf {
+    let mut result = std::path::PathBuf::new();
     for (index, component) in key.into_iter().enumerate() {
         // splay the first key out by the first two characters
         if index == 0 {
