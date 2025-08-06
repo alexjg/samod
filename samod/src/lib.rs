@@ -10,7 +10,7 @@ use futures::{
     channel::{mpsc, oneshot},
     stream::FuturesUnordered,
 };
-use rand::rand_core::UnwrapErr;
+use rand::SeedableRng;
 use samod_core::{
     CommandId, CommandResult, ConnectionId, DocumentActorId, LoaderState, UnixTimestamp,
     actors::{
@@ -91,7 +91,7 @@ impl Samod {
             peer_id,
             announce_policy,
         } = builder;
-        let mut rng = UnwrapErr(rand::rngs::OsRng);
+        let mut rng = rand::rngs::StdRng::from_rng(&mut rand::rng());
         let peer_id = peer_id.unwrap_or_else(|| PeerId::new_with_rng(&mut rng));
         let mut loading = Hub::load(rng, UnixTimestamp::now(), peer_id.clone());
         let mut running_tasks = FuturesUnordered::new();

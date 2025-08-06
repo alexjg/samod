@@ -4,7 +4,7 @@ use std::{
 };
 
 use automerge::Automerge;
-use rand::rand_core::UnwrapErr;
+use rand::SeedableRng;
 use samod_core::{
     CommandId, CommandResult, ConnectionId, DocumentActorId, DocumentChanged, DocumentId, PeerId,
     StorageId, StorageKey, UnixTimestamp,
@@ -49,7 +49,7 @@ impl SamodWrapper {
     pub fn new_with_storage(nickname: String, mut storage: Storage) -> Self {
         let peer_id = PeerId::from_string(nickname.clone());
         let mut loader = samod_core::SamodLoader::new(
-            UnwrapErr(rand::rngs::OsRng),
+            rand::rngs::StdRng::from_rng(&mut rand::rng()),
             peer_id,
             UnixTimestamp::now(),
         );
