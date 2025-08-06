@@ -13,7 +13,7 @@ use crate::actors::driver::{Actor, Driver, StepResult};
 use crate::actors::messages::{Broadcast, DocToHubMsgPayload};
 use crate::actors::{DocToHubMsg, HubToDocMsg, RunState};
 use crate::io::{IoResult, IoTask};
-use crate::{DocumentActorId, DocumentChanged, DocumentId, UnixTimestamp};
+use crate::{DocumentActorId, DocumentChanged, DocumentId, PeerId, UnixTimestamp};
 
 use super::{actor_state::ActorState, errors::DocumentError, run::ActorInput};
 
@@ -127,8 +127,8 @@ impl DocumentActor {
     #[tracing::instrument(
         skip(self, io_result),
         fields(
-            local_peer_id=%self.state.lock().unwrap().local_peer_id(),
-            document_id=%self.state.lock().unwrap().document_id,
+            local_peer_id=%self.local_peer_id(),
+            document_id=%self.document_id,
             actor_id=%self.id
         )
     )]
@@ -144,6 +144,10 @@ impl DocumentActor {
     /// Returns the document ID this actor manages.
     pub fn document_id(&self) -> &DocumentId {
         &self.document_id
+    }
+
+    fn local_peer_id(&self) -> PeerId {
+        self.state.lock().unwrap().local_peer_id().clone()
     }
 
     /// Provides mutable access to the document with automatic side effect handling.
