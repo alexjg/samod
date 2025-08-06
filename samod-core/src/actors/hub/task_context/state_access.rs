@@ -1,4 +1,7 @@
-use std::{cell::RefCell, collections::HashMap, rc::Rc};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+};
 
 use crate::{
     ConnectionId, DocumentActorId, DocumentId, PeerId, UnixTimestamp,
@@ -16,29 +19,36 @@ use super::{ConnectionAccess, IoAccess};
 pub(crate) struct StateAccess<'a> {
     now: UnixTimestamp,
     io: IoAccess,
-    state: &'a Rc<RefCell<State>>,
+    state: &'a Arc<Mutex<State>>,
 }
 
 impl<'a> StateAccess<'a> {
-    pub(crate) fn new(now: UnixTimestamp, io: IoAccess, state: &'a Rc<RefCell<State>>) -> Self {
+    pub(crate) fn new(now: UnixTimestamp, io: IoAccess, state: &'a Arc<Mutex<State>>) -> Self {
         Self { now, io, state }
     }
 
     pub(crate) fn add_connection(&self, connection_id: ConnectionId, connection_state: Connection) {
         self.state
-            .borrow_mut()
+            .lock()
+            .unwrap()
             .add_connection(connection_id, connection_state);
     }
 
     pub(crate) fn remove_connection(&self, connection_id: &ConnectionId) -> Option<Connection> {
-        self.state.borrow_mut().remove_connection(connection_id)
+        self.state.lock().unwrap().remove_connection(connection_id)
     }
 
     pub(crate) fn get_connection(
         &self,
         connection_id: &ConnectionId,
     ) -> Option<ConnectionAccess<'a>> {
-        if self.state.borrow().get_connection(connection_id).is_some() {
+        if self
+            .state
+            .lock()
+            .unwrap()
+            .get_connection(connection_id)
+            .is_some()
+        {
             Some(ConnectionAccess {
                 now: self.now,
                 io: self.io.clone(),
@@ -52,33 +62,40 @@ impl<'a> StateAccess<'a> {
 
     /// Get the peer ID for this samod instance
     pub(crate) fn peer_id(&self) -> PeerId {
-        self.state.borrow().peer_id().clone()
+        self.state.lock().unwrap().peer_id().clone()
     }
 
     /// Get local metadata to send during handshake
     pub(crate) fn get_local_metadata(&self) -> PeerMetadata {
-        self.state.borrow().get_local_metadata()
+        self.state.lock().unwrap().get_local_metadata()
     }
 
     pub(crate) fn add_document_actor(&self, actor_id: DocumentActorId, document_id: DocumentId) {
         self.state
-            .borrow_mut()
+            .lock()
+            .unwrap()
             .add_document_actor(actor_id, document_id);
     }
 
     pub(crate) fn remove_document_actor(&self, actor_id: DocumentActorId) {
-        self.state.borrow_mut().remove_document_actor(&actor_id);
+        self.state.lock().unwrap().remove_document_actor(&actor_id);
     }
 
     pub(crate) fn find_actor_for_document(&self, document_id: &DocumentId) -> Option<ActorInfo> {
         self.state
-            .borrow()
+            .lock()
+            .unwrap()
             .find_actor_for_document(document_id)
             .cloned()
     }
 
     pub(crate) fn document_actors(&self) -> Vec<ActorInfo> {
-        self.state.borrow().document_actors().cloned().collect()
+        self.state
+            .lock()
+            .unwrap()
+            .document_actors()
+            .cloned()
+            .collect()
     }
 
     pub(crate) fn add_pending_find_command(
@@ -88,7 +105,8 @@ impl<'a> StateAccess<'a> {
         reply: oneshot::Sender<CommandResult>,
     ) {
         self.state
-            .borrow_mut()
+            .lock()
+            .unwrap()
             .add_pending_find_command(document_id, command_id, reply);
     }
 
@@ -99,18 +117,20 @@ impl<'a> StateAccess<'a> {
         reply: oneshot::Sender<CommandResult>,
     ) {
         self.state
-            .borrow_mut()
+            .lock()
+            .unwrap()
             .add_pending_create_command(actor_id, command_id, reply);
     }
 
     /// Get a list of all established peer connections
     pub(crate) fn established_peers(&self) -> Vec<(ConnectionId, PeerId)> {
-        self.state.borrow().established_peers()
+        self.state.lock().unwrap().established_peers()
     }
 
     pub(crate) fn remote_peer_id(&self, conn_id: ConnectionId) -> Option<PeerId> {
         self.state
-            .borrow()
+            .lock()
+            .unwrap()
             .get_connection(&conn_id)
             .and_then(|c| c.remote_peer_id())
             .cloned()
@@ -122,7 +142,8 @@ impl<'a> StateAccess<'a> {
         new_status: DocumentStatus,
     ) {
         self.state
-            .borrow_mut()
+            .lock()
+            .unwrap()
             .update_document_status(doc_actor, new_status)
     }
 
@@ -132,16 +153,17 @@ impl<'a> StateAccess<'a> {
         document_id: DocumentId,
     ) {
         self.state
-            .borrow_mut()
+            .lock()
+            .unwrap()
             .add_document_to_connection(connection_id, document_id);
     }
 
     pub(crate) fn ensure_connections(&self) -> Vec<(DocumentActorId, ConnectionId, PeerId)> {
-        self.state.borrow_mut().ensure_connections()
+        self.state.lock().unwrap().ensure_connections()
     }
 
     pub(crate) fn pop_closed_connections(&self) -> Vec<ConnectionId> {
-        self.state.borrow_mut().pop_closed_connections()
+        self.state.lock().unwrap().pop_closed_connections()
     }
 
     pub(crate) fn update_peer_states(
@@ -150,18 +172,19 @@ impl<'a> StateAccess<'a> {
         new_states: HashMap<ConnectionId, PeerDocState>,
     ) {
         self.state
-            .borrow_mut()
+            .lock()
+            .unwrap()
             .update_peer_states(actor, new_states);
     }
 
     pub(crate) fn pop_new_connection_info(&self) -> HashMap<ConnectionId, ConnectionInfo> {
-        self.state.borrow_mut().pop_new_connection_info()
+        self.state.lock().unwrap().pop_new_connection_info()
     }
 
     pub(crate) fn receive_ephemeral_message(
         &self,
         msg: EphemeralMessage,
     ) -> Option<EphemeralMessage> {
-        self.state.borrow_mut().receive_ephemeral_msg(msg)
+        self.state.lock().unwrap().receive_ephemeral_msg(msg)
     }
 }

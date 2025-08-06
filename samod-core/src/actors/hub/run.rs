@@ -1,4 +1,4 @@
-use std::{cell::RefCell, rc::Rc};
+use std::sync::{Arc, Mutex};
 
 use futures::{StreamExt, channel::mpsc, stream::FuturesUnordered};
 
@@ -20,10 +20,10 @@ pub(crate) use hub_input::HubInput;
 mod hub_output;
 pub(crate) use hub_output::HubOutput;
 
-pub(crate) async fn run<R: rand::Rng + Clone + 'static>(
+pub(crate) async fn run<R: rand::Rng + Send + Clone + 'static>(
     rng: R,
-    now: Rc<RefCell<UnixTimestamp>>,
-    state: Rc<RefCell<State>>,
+    now: Arc<Mutex<UnixTimestamp>>,
+    state: Arc<Mutex<State>>,
     mut rx_input: mpsc::UnboundedReceiver<HubInput>,
     io: ActorIo<Hub>,
 ) {
@@ -187,5 +187,5 @@ pub(crate) async fn run<R: rand::Rng + Clone + 'static>(
         }
     }
 
-    state.borrow_mut().set_run_state(RunState::Stopped);
+    state.lock().unwrap().set_run_state(RunState::Stopped);
 }

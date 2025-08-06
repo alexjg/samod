@@ -1,5 +1,5 @@
 mod command;
-use std::{cell::RefCell, rc::Rc};
+use std::sync::{Arc, Mutex};
 
 pub(crate) use command::Command;
 pub use command::{CommandId, CommandResult};
@@ -33,11 +33,8 @@ use super::{
 
 pub struct Hub {
     pub(crate) driver: crate::actors::driver::Driver<Hub>,
-    state: Rc<RefCell<State>>,
+    state: Arc<Mutex<State>>,
 }
-// TODO: justify this. I think it's okay because we never share the Rc with state that is not
-// owned by the hub actor itself.
-unsafe impl Send for Hub {}
 
 impl Actor for Hub {
     type IoTaskAction = HubIoAction;
@@ -77,10 +74,10 @@ impl Actor for Hub {
 }
 
 impl Hub {
-    pub(crate) fn new<R: rand::Rng + Clone + 'static>(
+    pub(crate) fn new<R: rand::Rng + Clone + Send + Sync + 'static>(
         rng: R,
         now: UnixTimestamp,
-        state: Rc<RefCell<State>>,
+        state: Arc<Mutex<State>>,
     ) -> Self {
         let driver = Driver::spawn(now, |args| {
             run::run(rng, args.now, state.clone(), args.rx_input, args.io)
@@ -101,7 +98,7 @@ impl Hub {
     /// # Returns
     ///
     /// A `SamodLoader` that will eventually yield a loaded `Samod` instance.
-    pub fn load<R: rand::Rng + Clone + 'static>(
+    pub fn load<R: rand::Rng + Clone + Send + Sync + 'static>(
         rng: R,
         now: UnixTimestamp,
         peer_id: PeerId,
@@ -126,7 +123,7 @@ impl Hub {
     /// - `completed_commands`: Commands that have finished execution
     #[tracing::instrument(skip(self), fields(event = %event), level = "trace")]
     pub fn handle_event(&mut self, now: UnixTimestamp, event: HubEvent) -> HubResults {
-        if self.state.borrow().run_state() == RunState::Stopped {
+        if self.state.lock().unwrap().run_state() == RunState::Stopped {
             return HubResults {
                 stopped: true,
                 ..Default::default()
@@ -143,7 +140,7 @@ impl Hub {
         match self.driver.step(now) {
             StepResult::Suspend(results) => results,
             StepResult::Complete { mut results, .. } => {
-                self.state.borrow_mut().set_run_state(RunState::Stopped);
+                self.state.lock().unwrap().set_run_state(RunState::Stopped);
                 tracing::trace!("hub stopped");
                 results.stopped = true;
                 results
@@ -158,7 +155,7 @@ impl Hub {
     /// connected to the same underlying storage (e.g., browser tabs sharing
     /// IndexedDB, processes sharing filesystem storage).
     pub fn storage_id(&self) -> StorageId {
-        self.state.borrow().storage_id()
+        self.state.lock().unwrap().storage_id()
     }
 
     /// Returns the peer ID for this samod instance.
@@ -170,7 +167,7 @@ impl Hub {
     ///
     /// The peer ID for this instance.
     pub fn peer_id(&self) -> PeerId {
-        self.state.borrow().peer_id().clone()
+        self.state.lock().unwrap().peer_id().clone()
     }
 
     /// Returns a list of all connection IDs.
@@ -181,7 +178,7 @@ impl Hub {
     ///
     /// A vector of all connection IDs currently managed by this instance.
     pub fn connections(&self) -> Vec<ConnectionInfo> {
-        self.state.borrow().connections()
+        self.state.lock().unwrap().connections()
     }
 
     /// Returns a list of all established peer connections.
@@ -193,7 +190,7 @@ impl Hub {
     ///
     /// A vector of tuples containing (connection_id, peer_id) for each established connection.
     pub fn established_peers(&self) -> Vec<(ConnectionId, PeerId)> {
-        self.state.borrow().established_peers()
+        self.state.lock().unwrap().established_peers()
     }
 
     /// Checks if this instance is connected to a specific peer.
@@ -206,10 +203,10 @@ impl Hub {
     ///
     /// `true` if there is an established connection to the specified peer, `false` otherwise.
     pub fn is_connected_to(&self, peer_id: &PeerId) -> bool {
-        self.state.borrow().is_connected_to(peer_id)
+        self.state.lock().unwrap().is_connected_to(peer_id)
     }
 
     pub fn is_stopped(&self) -> bool {
-        self.state.borrow().run_state() == RunState::Stopped
+        self.state.lock().unwrap().run_state() == RunState::Stopped
     }
 }

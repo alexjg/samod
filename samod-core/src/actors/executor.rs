@@ -6,12 +6,12 @@ use std::{
 
 use futures::{
     FutureExt,
-    task::{ArcWake, LocalFutureObj, waker},
+    task::{ArcWake, FutureObj, waker},
 };
 
 /// A very simple "executor" which just drives a single future.
-pub(crate) struct LocalExecutor<T> {
-    running: Option<LocalFutureObj<'static, T>>,
+pub(crate) struct Executor<T> {
+    running: Option<FutureObj<'static, T>>,
 }
 
 struct WakeThis {
@@ -26,10 +26,10 @@ impl ArcWake for WakeThis {
     }
 }
 
-impl<T> LocalExecutor<T> {
-    /// Create a new `LocalExecutor` which will  drive the given Future until completion
-    pub(crate) fn spawn<Fut: Future<Output = T> + 'static>(fut: Fut) -> Self {
-        let fut_obj = LocalFutureObj::new(Box::new(fut));
+impl<T> Executor<T> {
+    /// Create a new [`Executor`] which will  drive the given Future until completion
+    pub(crate) fn spawn<Fut: Future<Output = T> + Send + 'static>(fut: Fut) -> Self {
+        let fut_obj = FutureObj::new(Box::new(fut));
         Self {
             running: Some(fut_obj),
         }

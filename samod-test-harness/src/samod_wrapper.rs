@@ -4,6 +4,7 @@ use std::{
 };
 
 use automerge::Automerge;
+use rand::SeedableRng;
 use samod_core::{
     CommandId, CommandResult, ConnectionId, DocumentActorId, DocumentChanged, DocumentId, PeerId,
     StorageId, StorageKey, UnixTimestamp,
@@ -47,7 +48,11 @@ impl SamodWrapper {
 
     pub fn new_with_storage(nickname: String, mut storage: Storage) -> Self {
         let peer_id = PeerId::from_string(nickname.clone());
-        let mut loader = samod_core::SamodLoader::new(rand::rng(), peer_id, UnixTimestamp::now());
+        let mut loader = samod_core::SamodLoader::new(
+            rand::rngs::StdRng::from_rng(&mut rand::rng()),
+            peer_id,
+            UnixTimestamp::now(),
+        );
         let now = UnixTimestamp::now();
 
         // Execute the loading process
@@ -93,9 +98,9 @@ impl SamodWrapper {
             .expect("The create connection command never completed");
         match completed_command {
             CommandResult::CreateConnection { connection_id, .. } => connection_id,
-            _ => panic!(
-                "Expected a CreateConnection command result, but got {completed_command:?}"
-            ),
+            _ => {
+                panic!("Expected a CreateConnection command result, but got {completed_command:?}")
+            }
         }
     }
 
@@ -110,9 +115,9 @@ impl SamodWrapper {
             .expect("The create incoming connection command never completed");
         match completed_command {
             CommandResult::CreateConnection { connection_id, .. } => connection_id,
-            _ => panic!(
-                "Expected a CreateConnection command result, but got {completed_command:?}"
-            ),
+            _ => {
+                panic!("Expected a CreateConnection command result, but got {completed_command:?}")
+            }
         }
     }
 
@@ -132,9 +137,7 @@ impl SamodWrapper {
                 doc_id: document_id,
                 actor_id,
             },
-            _ => panic!(
-                "Expected a CreateDocument command result, but got {completed_command:?}"
-            ),
+            _ => panic!("Expected a CreateDocument command result, but got {completed_command:?}"),
         }
     }
 
@@ -180,9 +183,9 @@ impl SamodWrapper {
                 CommandResult::FindDocument { found, actor_id } => {
                     Some(if found { Some(actor_id) } else { None })
                 }
-                _ => panic!(
-                    "Expected a FindDocument command result, but got {completed_command:?}"
-                ),
+                _ => {
+                    panic!("Expected a FindDocument command result, but got {completed_command:?}")
+                }
             }
         } else {
             None // Command not yet completed

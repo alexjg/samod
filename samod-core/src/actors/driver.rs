@@ -1,4 +1,8 @@
-use std::{cell::RefCell, collections::HashMap, fmt::Debug, rc::Rc};
+use std::{
+    collections::HashMap,
+    fmt::Debug,
+    sync::{Arc, Mutex},
+};
 
 use futures::channel::{mpsc, oneshot};
 
@@ -7,7 +11,7 @@ use crate::{
     io::{IoResult, IoTask, IoTaskId},
 };
 
-use super::executor::LocalExecutor;
+use super::executor::Executor;
 
 pub(crate) trait Actor {
     type IoTaskAction: Debug;
@@ -24,15 +28,15 @@ pub(crate) trait Actor {
 }
 
 pub(crate) struct Driver<A: Actor> {
-    now: Rc<RefCell<UnixTimestamp>>,
+    now: Arc<Mutex<UnixTimestamp>>,
     io_tasks: HashMap<IoTaskId, oneshot::Sender<A::IoResult>>,
     rx_output: mpsc::UnboundedReceiver<DriverOutput<A>>,
     tx_input: mpsc::UnboundedSender<A::Input>,
-    executor: LocalExecutor<A::Complete>,
+    executor: Executor<A::Complete>,
 }
 
 pub(crate) struct SpawnArgs<A: Actor> {
-    pub(crate) now: Rc<RefCell<UnixTimestamp>>,
+    pub(crate) now: Arc<Mutex<UnixTimestamp>>,
     pub(crate) io: ActorIo<A>,
     pub(crate) rx_input: mpsc::UnboundedReceiver<A::Input>,
 }
@@ -66,11 +70,11 @@ pub(crate) enum StepResult<A: Actor> {
 }
 
 impl<A: Actor> Driver<A> {
-    pub fn spawn<S: FnOnce(SpawnArgs<A>) -> F, F: Future<Output = A::Complete> + 'static>(
+    pub fn spawn<S: FnOnce(SpawnArgs<A>) -> F, F: Future<Output = A::Complete> + Send + 'static>(
         now: UnixTimestamp,
         spawn: S,
     ) -> Self {
-        let now = Rc::new(RefCell::new(now));
+        let now = Arc::new(Mutex::new(now));
         let (tx_output, rx_output) = mpsc::unbounded();
         let (tx_input, rx_input) = mpsc::unbounded();
         let future = spawn(SpawnArgs {
@@ -78,7 +82,7 @@ impl<A: Actor> Driver<A> {
             rx_input,
             now: now.clone(),
         });
-        let executor = LocalExecutor::spawn(future);
+        let executor = Executor::spawn(future);
         Self {
             now,
             io_tasks: HashMap::new(),
@@ -89,12 +93,12 @@ impl<A: Actor> Driver<A> {
     }
 
     pub fn handle_input(&mut self, now: UnixTimestamp, input: A::Input) {
-        *self.now.borrow_mut() = now;
+        *self.now.lock().unwrap() = now;
         let _ = self.tx_input.unbounded_send(input);
     }
 
     pub fn handle_io_complete(&mut self, now: UnixTimestamp, result: IoResult<A::IoResult>) {
-        *self.now.borrow_mut() = now;
+        *self.now.lock().unwrap() = now;
         if let Some(reply) = self.io_tasks.remove(&result.task_id) {
             let _ = reply.send(result.payload);
         } else {
@@ -106,7 +110,7 @@ impl<A: Actor> Driver<A> {
     }
 
     pub fn step(&mut self, now: UnixTimestamp) -> StepResult<A> {
-        *self.now.borrow_mut() = now;
+        *self.now.lock().unwrap() = now;
         let future_result = self.executor.run_until_stalled();
         let mut outputs = Vec::new();
         let mut new_io_tasks = Vec::new();

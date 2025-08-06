@@ -1,4 +1,4 @@
-use std::{cell::RefCell, rc::Rc};
+use std::sync::{Arc, Mutex};
 
 use automerge::Automerge;
 use tracing::Instrument;
@@ -32,7 +32,7 @@ pub struct DocumentActor {
     /// The ID of this actor according to the main `Samod` instance
     id: DocumentActorId,
     /// Shared internal state for document access
-    state: Rc<RefCell<ActorState>>,
+    state: Arc<Mutex<ActorState>>,
 
     driver: Driver<Self>,
 }
@@ -68,8 +68,6 @@ impl Actor for DocumentActor {
     }
 }
 
-unsafe impl Send for DocumentActor {}
-
 impl DocumentActor {
     /// Creates a new document actor for the specified document.
     pub fn new(
@@ -89,7 +87,7 @@ impl DocumentActor {
             } else {
                 ActorState::new_loading(document_id.clone(), local_peer_id, Automerge::new())
             };
-            Rc::new(RefCell::new(state))
+            Arc::new(Mutex::new(state))
         });
 
         let mut driver = Driver::<DocumentActor>::spawn(now, |args| {
@@ -129,8 +127,8 @@ impl DocumentActor {
     #[tracing::instrument(
         skip(self, io_result),
         fields(
-            local_peer_id=%self.state.borrow().local_peer_id(),
-            document_id=%self.state.borrow().document_id,
+            local_peer_id=%self.state.lock().unwrap().local_peer_id(),
+            document_id=%self.state.lock().unwrap().document_id,
             actor_id=%self.id
         )
     )]
@@ -181,7 +179,7 @@ impl DocumentActor {
         F: FnOnce(&mut Automerge) -> R,
     {
         // Try to access the internal document
-        let mut state = self.state.borrow_mut();
+        let mut state = self.state.lock().unwrap();
         tracing::Span::current().record("local_peer_id", state.local_peer_id().to_string());
         let document = state.document()?;
 
@@ -223,7 +221,7 @@ impl DocumentActor {
         result
             .outgoing_messages
             .push(DocToHubMsg(DocToHubMsgPayload::Broadcast {
-                connections: self.state.borrow().broadcast_targets(Vec::new()),
+                connections: self.state.lock().unwrap().broadcast_targets(Vec::new()),
                 msg: Broadcast::New { msg },
             }));
         result
@@ -231,11 +229,11 @@ impl DocumentActor {
 
     /// Returns true if the document is loaded and ready for operations.
     pub fn is_document_ready(&self) -> bool {
-        matches!(self.state.borrow().phase, Phase::Ready(_))
+        matches!(self.state.lock().unwrap().phase, Phase::Ready(_))
     }
 
     fn step(&mut self, now: UnixTimestamp) -> ActorResult {
-        if self.state.borrow().run_state() == RunState::Stopped {
+        if self.state.lock().unwrap().run_state() == RunState::Stopped {
             panic!("document actor is stopped");
         }
         let mut result = match self.driver.step(now) {
@@ -244,7 +242,7 @@ impl DocumentActor {
         };
 
         // TODO: do this in the run loop, not here
-        if let Some(new_states) = self.state.borrow_mut().pop_new_peer_states() {
+        if let Some(new_states) = self.state.lock().unwrap().pop_new_peer_states() {
             result
                 .outgoing_messages
                 .push(DocToHubMsg(DocToHubMsgPayload::PeerStatesChanged {
@@ -256,7 +254,7 @@ impl DocumentActor {
     }
 
     pub fn is_stopped(&self) -> bool {
-        self.state.borrow().run_state() == RunState::Stopped
+        self.state.lock().unwrap().run_state() == RunState::Stopped
     }
 }
 
