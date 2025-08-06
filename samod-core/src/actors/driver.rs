@@ -11,7 +11,7 @@ use crate::{
     io::{IoResult, IoTask, IoTaskId},
 };
 
-use super::executor::LocalExecutor;
+use super::executor::Executor;
 
 pub(crate) trait Actor {
     type IoTaskAction: Debug;
@@ -32,7 +32,7 @@ pub(crate) struct Driver<A: Actor> {
     io_tasks: HashMap<IoTaskId, oneshot::Sender<A::IoResult>>,
     rx_output: mpsc::UnboundedReceiver<DriverOutput<A>>,
     tx_input: mpsc::UnboundedSender<A::Input>,
-    executor: LocalExecutor<A::Complete>,
+    executor: Executor<A::Complete>,
 }
 
 pub(crate) struct SpawnArgs<A: Actor> {
@@ -82,7 +82,7 @@ impl<A: Actor> Driver<A> {
             rx_input,
             now: now.clone(),
         });
-        let executor = LocalExecutor::spawn(future);
+        let executor = Executor::spawn(future);
         Self {
             now,
             io_tasks: HashMap::new(),

@@ -10,7 +10,7 @@ use futures::{
 };
 
 /// A very simple "executor" which just drives a single future.
-pub(crate) struct LocalExecutor<T> {
+pub(crate) struct Executor<T> {
     running: Option<FutureObj<'static, T>>,
 }
 
@@ -26,8 +26,8 @@ impl ArcWake for WakeThis {
     }
 }
 
-impl<T> LocalExecutor<T> {
-    /// Create a new `LocalExecutor` which will  drive the given Future until completion
+impl<T> Executor<T> {
+    /// Create a new [`Executor`] which will  drive the given Future until completion
     pub(crate) fn spawn<Fut: Future<Output = T> + Send + 'static>(fut: Fut) -> Self {
         let fut_obj = FutureObj::new(Box::new(fut));
         Self {
