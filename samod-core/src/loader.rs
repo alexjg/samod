@@ -20,8 +20,10 @@ use crate::{
 ///
 /// ```rust,no_run
 /// use samod_core::{PeerId, SamodLoader, LoaderState, UnixTimestamp, io::{StorageResult, IoResult}};
+/// use rand::SeedableRng;
 ///
-/// let mut loader = SamodLoader::new(rand::rng(), PeerId::from("test"), UnixTimestamp::now());
+/// let rng = rand::rngs::StdRng::from_rng(&mut rand::rng());
+/// let mut loader = SamodLoader::new(rng, PeerId::from("test"), UnixTimestamp::now());
 ///
 /// loop {
 ///     match loader.step(UnixTimestamp::now()) {
