@@ -1,6 +1,6 @@
 [package]
 name = "samod-core"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 repository = "https://github.com/alexjg/samod"
 authors = ["Alex Good <alex@patternist.xyz>"]

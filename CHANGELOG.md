@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.1 - 2025-08-08
+
+### Fixed
+
+* Fix a deadlock 
+
 ## 0.2.0 - 2025-08-06
 
 ### Fixed
