@@ -4,6 +4,7 @@ use automerge as am;
 
 use crate::DocumentId;
 
+#[derive(Clone)]
 pub struct AutomergeUrl {
     document_id: DocumentId,
     path: Option<Vec<am::Prop>>,
