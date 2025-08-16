@@ -1,4 +1,3 @@
-use futures::channel::oneshot;
 use std::collections::HashMap;
 
 use crate::{
@@ -216,10 +215,9 @@ impl State {
         &mut self,
         document_id: DocumentId,
         command_id: CommandId,
-        reply: oneshot::Sender<CommandResult>,
     ) {
         self.pending_commands
-            .add_pending_find_command(document_id, command_id, reply);
+            .add_pending_find_command(document_id, command_id);
     }
 
     /// Adds a command ID to the list of commands waiting for an actor to report readiness.
@@ -227,10 +225,13 @@ impl State {
         &mut self,
         actor_id: DocumentActorId,
         command_id: CommandId,
-        reply: oneshot::Sender<CommandResult>,
     ) {
         self.pending_commands
-            .add_pending_create_command(actor_id, command_id, reply);
+            .add_pending_create_command(actor_id, command_id);
+    }
+
+    pub(crate) fn pop_completed_commands(&mut self) -> Vec<(CommandId, CommandResult)> {
+        self.pending_commands.pop_completed_commands()
     }
 
     pub(crate) fn document_actors(&self) -> impl Iterator<Item = &ActorInfo> {

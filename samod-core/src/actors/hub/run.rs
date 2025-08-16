@@ -1,6 +1,6 @@
 use std::sync::{Arc, Mutex};
 
-use futures::{StreamExt, channel::mpsc, stream::FuturesUnordered};
+use futures::{StreamExt, channel::mpsc};
 
 use crate::{
     UnixTimestamp,
@@ -28,8 +28,6 @@ pub(crate) async fn run<R: rand::Rng + Send + Clone + 'static>(
     io: ActorIo<Hub>,
 ) {
     // Collection of futures representing commands that are currently executing
-    let mut running_commands = FuturesUnordered::new();
-
     let ctx = TaskContext::new(rng, now.clone(), io.clone(), state.clone());
 
     loop {
@@ -43,15 +41,9 @@ pub(crate) async fn run<R: rand::Rng + Send + Clone + 'static>(
                     },
                     HubInput::Command{command_id, command} => {
                         let ctx = ctx.clone();
-                        let handler = async move {
-                            let result = command_handlers::handle_command(
-                                ctx,
-                                command_id,
-                                *command,
-                            ).await;
-                            (command_id, result)
-                        };
-                        running_commands.push(handler);
+                        if let Some(result) = command_handlers::handle_command(ctx, command_id, *command) {
+                            io.emit_event(HubOutput::CommandCompleted{ command_id, result });
+                        }
                     },
                     HubInput::Tick => {
                         // Tick events are used to trigger periodic processing
@@ -97,10 +89,6 @@ pub(crate) async fn run<R: rand::Rng + Send + Clone + 'static>(
                     },
                 }
             }
-            finished_command = running_commands.select_next_some() => {
-                let (command_id, result) = finished_command;
-                io.emit_event(HubOutput::CommandCompleted{ command_id, result });
-            }
         }
 
         // Notify document actors of any closed connections
@@ -136,6 +124,10 @@ pub(crate) async fn run<R: rand::Rng + Send + Clone + 'static>(
                     new_state,
                 },
             });
+        }
+
+        for (command_id, result) in ctx.state().pop_completed_commands() {
+            io.emit_event(HubOutput::CommandCompleted { command_id, result });
         }
     }
 
@@ -180,10 +172,9 @@ pub(crate) async fn run<R: rand::Rng + Send + Clone + 'static>(
                     HubInput::Stop => continue,
                 }
             }
-            finished_command = running_commands.select_next_some() => {
-                let (command_id, result) = finished_command;
-                io.emit_event(HubOutput::CommandCompleted{ command_id, result });
-            }
+        }
+        for (command_id, result) in ctx.state().pop_completed_commands() {
+            io.emit_event(HubOutput::CommandCompleted { command_id, result });
         }
     }
 

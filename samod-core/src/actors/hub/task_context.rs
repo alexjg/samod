@@ -227,7 +227,7 @@ impl<R: rand::Rng + Send + Clone> TaskContext<R> {
     /// // When detecting a protocol error during handshake
     /// ctx.fail_connection_with_disconnect(&connection_id, "Protocol version mismatch".to_string()).await;
     /// ```
-    pub(crate) async fn fail_connection_with_disconnect(
+    pub(crate) fn fail_connection_with_disconnect(
         &self,
         connection_id: crate::ConnectionId,
         error: String,
@@ -244,7 +244,7 @@ impl<R: rand::Rng + Send + Clone> TaskContext<R> {
         self.emit_disconnect_event(connection_id, error);
         self.notify_doc_actors_of_removed_connection(connection_id);
         // Emit disconnect IoTask so caller can clean up the network connection
-        self.io().disconnect(connection_id).await;
+        self.io().disconnect(connection_id);
     }
 
     pub(crate) fn broadcast(

@@ -32,18 +32,8 @@ impl IoAccess {
         });
     }
 
-    pub(crate) fn disconnect(
-        &self,
-        connection_id: ConnectionId,
-    ) -> impl Future<Output = ()> + 'static {
-        let result = self.dispatch_task(HubIoAction::Disconnect { connection_id });
-        async move {
-            let result = result.await;
-            match result {
-                HubIoResult::Disconnect => (),
-                _ => panic!("Expected IoResultPayload::Disconnect, got {result:?}"),
-            }
-        }
+    pub(crate) fn disconnect(&self, connection_id: ConnectionId) {
+        let _ = self.dispatch_task(HubIoAction::Disconnect { connection_id });
     }
 
     fn dispatch_task(&self, task: HubIoAction) -> impl Future<Output = HubIoResult> + 'static {

@@ -11,32 +11,29 @@ use crate::{
     network::{ConnDirection, ConnectionEvent, PeerInfo, wire_protocol::WireMessage},
 };
 use automerge::Automerge;
-use futures::channel::oneshot;
 
 use super::{Command, CommandId, CommandResult, task_context::TaskContext};
 
-pub(crate) async fn handle_command<R: rand::Rng + Send + Clone>(
+/// Handle a command, returning `Some(CommandResult)` if the command was handled
+/// immediately and `None` if it will be completed asynchronously
+pub(crate) fn handle_command<R: rand::Rng + Send + Clone>(
     ctx: TaskContext<R>,
     command_id: CommandId,
     command: Command,
-) -> CommandResult {
+) -> Option<CommandResult> {
     match command {
-        Command::CreateConnection { direction } => handle_create_connection(ctx, direction).await,
-        Command::Receive { connection_id, msg } => handle_receive(ctx, connection_id, msg).await,
-        Command::ActorReady { document_id: _ } => {
-            // Placeholder for Phase 2 implementation
-            CommandResult::ActorReady
-        }
+        Command::CreateConnection { direction } => Some(handle_create_connection(ctx, direction)),
+        Command::Receive { connection_id, msg } => Some(handle_receive(ctx, connection_id, msg)),
+        Command::ActorReady { document_id: _ } => Some(CommandResult::ActorReady),
         Command::CreateDocument { content } => {
-            handle_create_document(ctx, command_id, *content).await
+            handle_create_document(ctx, command_id, *content);
+            None
         }
-        Command::FindDocument { document_id } => {
-            handle_find_document(ctx, command_id, document_id).await
-        }
+        Command::FindDocument { document_id } => handle_find_document(ctx, command_id, document_id),
     }
 }
 
-async fn handle_create_connection<R: rand::Rng + Send + Clone>(
+fn handle_create_connection<R: rand::Rng + Send + Clone>(
     ctx: TaskContext<R>,
     direction: ConnDirection,
 ) -> CommandResult {
@@ -62,7 +59,7 @@ async fn handle_create_connection<R: rand::Rng + Send + Clone>(
     CommandResult::CreateConnection { connection_id }
 }
 
-async fn handle_receive<R: rand::Rng + Send + Clone>(
+fn handle_receive<R: rand::Rng + Send + Clone>(
     ctx: TaskContext<R>,
     connection_id: ConnectionId,
     msg: Vec<u8>,
@@ -87,8 +84,7 @@ async fn handle_receive<R: rand::Rng + Send + Clone>(
                 e
             );
             let error_msg = format!("Message decode error: {e}");
-            ctx.fail_connection_with_disconnect(connection_id, error_msg)
-                .await;
+            ctx.fail_connection_with_disconnect(connection_id, error_msg);
 
             return CommandResult::Receive {
                 connection_id,
@@ -117,16 +113,13 @@ async fn handle_receive<R: rand::Rng + Send + Clone>(
                 sender_id: _,
                 target_id,
                 msg,
-            } => {
-                handle_doc_message(
-                    ctx.clone(),
-                    connection_id,
-                    target_id,
-                    doc_id,
-                    DocMessage::Sync(msg),
-                )
-                .await
-            }
+            } => handle_doc_message(
+                ctx.clone(),
+                connection_id,
+                target_id,
+                doc_id,
+                DocMessage::Sync(msg),
+            ),
             ReceiveEvent::EphemeralMessage {
                 doc_id,
                 sender_id,
@@ -149,7 +142,6 @@ async fn handle_receive<R: rand::Rng + Send + Clone>(
                         doc_id,
                         DocMessage::Ephemeral(msg),
                     )
-                    .await
                 }
             }
         }
@@ -160,7 +152,7 @@ async fn handle_receive<R: rand::Rng + Send + Clone>(
     }
 }
 
-async fn handle_doc_message<R: rand::Rng + Send + Clone>(
+fn handle_doc_message<R: rand::Rng + Send + Clone>(
     ctx: TaskContext<R>,
     connection_id: ConnectionId,
     target_id: PeerId,
@@ -183,97 +175,72 @@ async fn handle_doc_message<R: rand::Rng + Send + Clone>(
             },
         );
     } else {
-        spawn_actor(ctx.clone(), doc_id, None, Some((connection_id, msg))).await;
+        spawn_actor(ctx.clone(), doc_id, None, Some((connection_id, msg)));
     }
 }
 
 #[tracing::instrument(skip(ctx, init_doc), fields(command_id = %command_id))]
-async fn handle_create_document<R: rand::Rng + Send + Clone>(
+fn handle_create_document<R: rand::Rng + Send + Clone>(
     mut ctx: TaskContext<R>,
     command_id: CommandId,
     init_doc: Automerge,
-) -> CommandResult {
+) {
     // Generate new document ID
     let document_id = DocumentId::new(ctx.rng());
 
     tracing::debug!(%document_id, "creating new document");
 
-    let actor_id = spawn_actor(ctx.clone(), document_id, Some(init_doc), None).await;
-
-    // Create oneshot channel for deferred completion
-    let (tx, rx) = oneshot::channel();
+    let actor_id = spawn_actor(ctx.clone(), document_id, Some(init_doc), None);
 
     // Queue command for completion when actor reports ready
-    ctx.state()
-        .add_pending_create_command(actor_id, command_id, tx);
-
-    // Await the result from the oneshot channel
-    rx.await.unwrap_or_else(|_| CommandResult::CreateDocument {
-        document_id: DocumentId::new(ctx.rng()),
-        actor_id: DocumentActorId::new(),
-    })
+    ctx.state().add_pending_create_command(actor_id, command_id);
 }
 
 #[tracing::instrument(skip(ctx), fields(document_id = %document_id))]
-async fn handle_find_document<R: rand::Rng + Send + Clone>(
+fn handle_find_document<R: rand::Rng + Send + Clone>(
     ctx: TaskContext<R>,
     command_id: CommandId,
     document_id: DocumentId,
-) -> CommandResult {
+) -> Option<CommandResult> {
     tracing::debug!("find document command received");
     // Check if actor already exists and is ready
     if let Some(actor_info) = ctx.state().find_actor_for_document(&document_id) {
         tracing::trace!(%actor_info.actor_id, ?actor_info.status, "found existing actor for document");
-        match actor_info.status {
+        return match actor_info.status {
             DocumentStatus::Spawned | DocumentStatus::Requesting | DocumentStatus::Loading => {
-                let (tx, rx) = oneshot::channel();
                 ctx.state()
-                    .add_pending_find_command(document_id, command_id, tx);
-                return rx.await.unwrap_or(CommandResult::FindDocument {
-                    found: false,
-                    actor_id: actor_info.actor_id,
-                });
+                    .add_pending_find_command(document_id, command_id);
+                None
             }
             DocumentStatus::Ready => {
                 // Document is ready
-                return CommandResult::FindDocument {
+                Some(CommandResult::FindDocument {
                     found: true,
                     actor_id: actor_info.actor_id,
-                };
+                })
             }
             DocumentStatus::NotFound => {
                 // In this case we need to restart the request process
                 tracing::trace!(%actor_info.actor_id, ?actor_info.status, "re-requesting document from actor");
                 ctx.send_to_actor(actor_info.actor_id, HubToDocMsgPayload::RequestAgain);
 
-                let (tx, rx) = oneshot::channel();
                 ctx.state()
-                    .add_pending_find_command(document_id, command_id, tx);
-                return rx.await.unwrap_or(CommandResult::FindDocument {
-                    found: false,
-                    actor_id: actor_info.actor_id,
-                });
+                    .add_pending_find_command(document_id, command_id);
+                None
             }
-        }
+        };
     }
 
     tracing::trace!("no existing actor found for document, spawning new actor");
 
-    let actor_id = spawn_actor(ctx.clone(), document_id.clone(), None, None).await;
+    spawn_actor(ctx.clone(), document_id.clone(), None, None);
 
-    // Create oneshot channel for deferred completion
-    let (tx, rx) = oneshot::channel();
     ctx.state()
-        .add_pending_find_command(document_id, command_id, tx);
-
-    // Await the result from the oneshot channel
-    rx.await.unwrap_or(CommandResult::FindDocument {
-        found: false,
-        actor_id,
-    })
+        .add_pending_find_command(document_id, command_id);
+    None
 }
 
-async fn spawn_actor<R: rand::Rng + Send + Clone>(
+fn spawn_actor<R: rand::Rng + Send + Clone>(
     ctx: TaskContext<R>,
     document_id: DocumentId,
     initial_doc: Option<Automerge>,

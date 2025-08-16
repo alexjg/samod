@@ -1,7 +1,5 @@
 use std::collections::HashMap;
 
-use futures::channel::oneshot;
-
 use crate::{
     DocumentActorId, DocumentId,
     actors::hub::{CommandId, CommandResult},
@@ -10,7 +8,7 @@ use crate::{
 pub(super) struct PendingCommands {
     pending_find_commands: HashMap<DocumentId, Vec<CommandId>>,
     pending_create_commands: HashMap<DocumentActorId, Vec<CommandId>>,
-    pending_command_completions: HashMap<CommandId, oneshot::Sender<CommandResult>>,
+    completed_commands: Vec<(CommandId, CommandResult)>,
 }
 
 impl PendingCommands {
@@ -18,7 +16,7 @@ impl PendingCommands {
         Self {
             pending_find_commands: HashMap::new(),
             pending_create_commands: HashMap::new(),
-            pending_command_completions: HashMap::new(),
+            completed_commands: Vec::new(),
         }
     }
 
@@ -26,26 +24,22 @@ impl PendingCommands {
         &mut self,
         document_id: DocumentId,
         command_id: CommandId,
-        reply: oneshot::Sender<CommandResult>,
     ) {
         self.pending_find_commands
             .entry(document_id)
             .or_default()
             .push(command_id);
-        self.pending_command_completions.insert(command_id, reply);
     }
 
     pub(super) fn add_pending_create_command(
         &mut self,
         actor_id: DocumentActorId,
         command_id: CommandId,
-        reply: oneshot::Sender<CommandResult>,
     ) {
         self.pending_create_commands
             .entry(actor_id)
             .or_default()
             .push(command_id);
-        self.pending_command_completions.insert(command_id, reply);
     }
 
     pub(super) fn resolve_pending_create(
@@ -55,12 +49,13 @@ impl PendingCommands {
     ) {
         if let Some(command_ids) = self.pending_create_commands.remove(&actor_id) {
             for command_id in command_ids {
-                if let Some(sender) = self.pending_command_completions.remove(&command_id) {
-                    let _ = sender.send(CommandResult::CreateDocument {
+                self.completed_commands.push((
+                    command_id,
+                    CommandResult::CreateDocument {
                         actor_id,
                         document_id: document_id.clone(),
-                    });
-                }
+                    },
+                ));
             }
         }
     }
@@ -73,14 +68,17 @@ impl PendingCommands {
     ) {
         if let Some(command_ids) = self.pending_find_commands.remove(document_id) {
             for command_id in command_ids {
-                if let Some(sender) = self.pending_command_completions.remove(&command_id) {
-                    let _ = sender.send(CommandResult::FindDocument { actor_id, found });
-                }
+                self.completed_commands
+                    .push((command_id, CommandResult::FindDocument { actor_id, found }));
             }
         }
     }
 
     pub(super) fn has_pending_create(&self, doc_actor_id: DocumentActorId) -> bool {
         self.pending_create_commands.contains_key(&doc_actor_id)
+    }
+
+    pub(super) fn pop_completed_commands(&mut self) -> Vec<(CommandId, CommandResult)> {
+        std::mem::take(&mut self.completed_commands)
     }
 }

@@ -12,7 +12,6 @@ use crate::{
     ephemera::EphemeralMessage,
     network::{ConnectionInfo, PeerDocState, PeerMetadata},
 };
-use futures::channel::oneshot;
 
 use super::{ConnectionAccess, IoAccess};
 
@@ -98,28 +97,26 @@ impl<'a> StateAccess<'a> {
             .collect()
     }
 
-    pub(crate) fn add_pending_find_command(
-        &self,
-        document_id: DocumentId,
-        command_id: CommandId,
-        reply: oneshot::Sender<CommandResult>,
-    ) {
+    pub(crate) fn add_pending_find_command(&self, document_id: DocumentId, command_id: CommandId) {
         self.state
             .lock()
             .unwrap()
-            .add_pending_find_command(document_id, command_id, reply);
+            .add_pending_find_command(document_id, command_id);
     }
 
     pub(crate) fn add_pending_create_command(
         &self,
         actor_id: DocumentActorId,
         command_id: CommandId,
-        reply: oneshot::Sender<CommandResult>,
     ) {
         self.state
             .lock()
             .unwrap()
-            .add_pending_create_command(actor_id, command_id, reply);
+            .add_pending_create_command(actor_id, command_id);
+    }
+
+    pub(crate) fn pop_completed_commands(&self) -> Vec<(CommandId, CommandResult)> {
+        self.state.lock().unwrap().pop_completed_commands()
     }
 
     /// Get a list of all established peer connections
