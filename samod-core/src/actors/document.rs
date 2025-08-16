@@ -26,26 +26,29 @@
 //! }
 //! ```
 
-pub mod actor;
-mod actor_io_access;
-use actor_io_access::ActorIoAccess;
+mod doc_actor_result;
+pub mod document_actor;
+pub use doc_actor_result::DocActorResult;
 mod document_actor_id;
 mod document_status;
 pub(crate) use document_status::DocumentStatus;
-mod compaction;
 pub mod errors;
 pub mod io;
+mod load;
+mod on_disk_state;
 mod peer_doc_connection;
 mod ready;
 mod request;
 mod spawn_args;
+mod with_doc_result;
+pub use with_doc_result::WithDocResult;
 
 // Internal modules for async runtime
-mod actor_state;
-use actor_state::ActorState;
-mod run;
+mod actor_input;
+mod doc_state;
+pub(crate) use actor_input::ActorInput;
 
-pub use actor::{ActorResult, DocumentActor, WithDocResult};
+pub use document_actor::DocumentActor;
 pub use document_actor_id::DocumentActorId;
 pub use errors::DocumentError;
 pub use spawn_args::SpawnArgs;

@@ -93,10 +93,10 @@ impl Samod {
         } = builder;
         let mut rng = rand::rngs::StdRng::from_rng(&mut rand::rng());
         let peer_id = peer_id.unwrap_or_else(|| PeerId::new_with_rng(&mut rng));
-        let mut loading = Hub::load(rng, UnixTimestamp::now(), peer_id.clone());
+        let mut loading = Hub::load(peer_id.clone());
         let mut running_tasks = FuturesUnordered::new();
         let hub = loop {
-            match loading.step(UnixTimestamp::now()) {
+            match loading.step(&mut rng, UnixTimestamp::now()) {
                 LoaderState::NeedIo(items) => {
                     for IoTask {
                         task_id,
@@ -113,13 +113,10 @@ impl Samod {
                 LoaderState::Loaded(hub) => break hub,
             }
             let (task_id, next_result) = running_tasks.select_next_some().await;
-            loading.provide_io_result(
-                UnixTimestamp::now(),
-                IoResult {
-                    task_id,
-                    payload: next_result,
-                },
-            );
+            loading.provide_io_result(IoResult {
+                task_id,
+                payload: next_result,
+            });
         };
 
         let (tx_storage, rx_storage) = mpsc::unbounded();
@@ -127,13 +124,14 @@ impl Samod {
         let inner = Arc::new(Mutex::new(Inner {
             workers: rayon::ThreadPoolBuilder::new().build().unwrap(),
             actors: HashMap::new(),
-            hub,
+            hub: *hub,
             pending_commands: HashMap::new(),
             connections: HashMap::new(),
             tx_io: tx_storage,
             tx_to_core,
             waiting_for_connection: HashMap::new(),
             stop_waiters: Vec::new(),
+            rng: rand::rngs::StdRng::from_os_rng(),
         }));
 
         // These futures are spawned on the runtime so they run regardless of awaiting
@@ -346,10 +344,10 @@ impl Samod {
             let mut inner = self.inner.lock().unwrap();
 
             for info in inner.hub.connections() {
-                if let ConnectionState::Connected { their_peer_id, .. } = info.state {
-                    if their_peer_id == peer_id {
-                        return Ok(());
-                    }
+                if let ConnectionState::Connected { their_peer_id, .. } = info.state
+                    && their_peer_id == peer_id
+                {
+                    return Ok(());
                 }
             }
             inner
@@ -398,6 +396,7 @@ struct Inner {
     tx_to_core: mpsc::UnboundedSender<(DocumentActorId, DocToHubMsg)>,
     waiting_for_connection: HashMap<PeerId, Vec<oneshot::Sender<()>>>,
     stop_waiters: Vec<oneshot::Sender<()>>,
+    rng: rand::rngs::StdRng,
 }
 
 impl Inner {
@@ -411,7 +410,7 @@ impl Inner {
             actor_messages,
             stopped,
             connection_events,
-        } = self.hub.handle_event(now, event);
+        } = self.hub.handle_event(&mut self.rng, now, event);
 
         for spawn_args in spawn_actors {
             self.spawn_actor(spawn_args);
@@ -528,7 +527,12 @@ impl Inner {
             doc_inner.lock().unwrap().handle_results(init_results);
 
             while let Ok(actor_task) = rx.recv() {
-                doc_inner.lock().unwrap().handle_task(actor_task);
+                let mut inner = doc_inner.lock().unwrap();
+                inner.handle_task(actor_task);
+                if inner.is_stopped() {
+                    tracing::debug!(?doc_id, ?actor_id, "actor stopped");
+                    break;
+                }
             }
         });
     }

@@ -5,9 +5,10 @@ use crate::{
     actors::{
         HubToDocMsg,
         document::SpawnArgs,
-        hub::{CommandId, CommandResult},
+        hub::{CommandId, CommandResult, connection::Connection},
+        messages::HubToDocMsgPayload,
     },
-    io::IoTask,
+    io::{IoTask, IoTaskId},
     network::ConnectionEvent,
 };
 
@@ -80,4 +81,47 @@ pub struct HubResults {
 
     /// Indicates whether the hub is currently stopped.
     pub stopped: bool,
+}
+
+impl HubResults {
+    pub(crate) fn send(&mut self, conn: &Connection, msg: Vec<u8>) {
+        tracing::trace!(conn_id=?conn.id(), remote_peer_id=?conn.remote_peer_id(), num_bytes=msg.len(), "sending message");
+        self.emit_io_action(HubIoAction::Send {
+            connection_id: conn.id(),
+            msg,
+        });
+    }
+
+    pub(crate) fn emit_disconnect_event(
+        &mut self,
+        connection_id: crate::ConnectionId,
+        error: String,
+    ) {
+        let event = ConnectionEvent::ConnectionFailed {
+            connection_id,
+            error,
+        };
+        self.connection_events.push(event);
+    }
+
+    pub(crate) fn emit_connection_event(&mut self, event: ConnectionEvent) {
+        self.connection_events.push(event);
+    }
+
+    pub(crate) fn send_to_doc_actor(&mut self, actor_id: DocumentActorId, msg: HubToDocMsgPayload) {
+        self.actor_messages.push((actor_id, HubToDocMsg(msg)));
+    }
+
+    pub(crate) fn emit_spawn_actor(&mut self, args: SpawnArgs) {
+        self.spawn_actors.push(args)
+    }
+
+    pub(crate) fn emit_io_action(&mut self, action: HubIoAction) -> IoTaskId {
+        let task_id = IoTaskId::new();
+        self.new_tasks.push(IoTask {
+            task_id: IoTaskId::new(),
+            action,
+        });
+        task_id
+    }
 }

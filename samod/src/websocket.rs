@@ -71,30 +71,6 @@ impl From<axum::extract::ws::Message> for WsMessage {
 
 impl Samod {
     /// Connect a websocket
-    ///
-    /// This function waits until the initial handshake is complete and then returns a future which
-    /// must be driven to completion to keep the connection alive. The returned future is required
-    /// so that we continue to respond to pings from the server which will otherwise disconnect us.
-    ///
-    /// ## Example
-    ///
-    /// ```no_run
-    /// use automerge_repo::{Repo, RepoHandle, ConnDirection, Storage};
-    ///
-    /// #[tokio::main]
-    /// async fn main() {
-    ///    let storage: Box<dyn Storage> = unimplemented!();
-    ///    let repo = Repo::new(None, storage);
-    ///    let handle = repo.run();
-    ///    let (conn, _) = tokio_tungstenite::connect_async("ws://localhost:8080").await.unwrap();
-    ///    let conn_driver = handle.connect_tungstenite(conn, ConnDirection::Outgoing).await.unwrap();
-    ///    tokio::spawn(async move {
-    ///        let finished_reason = conn_driver.await;
-    ///        eprintln!("Repo connection finished: {}", finished_reason);
-    ///    });
-    ///    // ...
-    /// }
-    /// ```
     #[cfg(feature = "tungstenite")]
     pub fn connect_tungstenite<S>(
         &self,
@@ -115,48 +91,6 @@ impl Samod {
     }
 
     /// Accept a websocket in an axum handler
-    ///
-    /// This function waits until the initial handshake is complete and then returns a future which
-    /// must be driven to completion to keep the connection alive.
-    ///
-    /// ## Example
-    ///
-    /// ```no_run
-    /// use automerge_repo::{Repo, RepoHandle, ConnDirection, Storage};
-    ///
-    /// #[tokio::main]
-    /// async fn main() {
-    ///     let storage: Box<dyn Storage> = unimplemented!();
-    ///     let handle = Repo::new(None, storage).run();
-    ///     let app = axum::Router::new()
-    ///         .route("/", axum::routing::get(websocket_handler))
-    ///         .with_state(handle.clone());
-    ///     let server = axum::Server::bind(&"0.0.0.0:0".parse().unwrap()).serve(app.into_make_service());
-    ///     let port = server.local_addr().port();
-    ///     tokio::spawn(server);
-    /// }
-    ///
-    /// async fn websocket_handler(
-    ///     ws: axum::extract::ws::WebSocketUpgrade,
-    ///     axum::extract::State(handle): axum::extract::State<RepoHandle>,
-    /// ) -> axum::response::Response {
-    ///     ws.on_upgrade(|socket| handle_socket(socket, handle))
-    /// }
-    ///
-    /// async fn handle_socket(
-    ///     socket: axum::extract::ws::WebSocket,
-    ///     repo: RepoHandle,
-    /// ) {
-    ///     let driver = repo
-    ///         .accept_axum(socket)
-    ///         .await
-    ///         .unwrap();
-    ///     tokio::spawn(async {
-    ///         let finished_reason = driver.await;
-    ///         eprintln!("Repo connection finished: {}", finished_reason);
-    ///     });
-    /// }
-    /// ```
     #[cfg(feature = "axum")]
     pub fn accept_axum<S>(&self, stream: S) -> impl Future<Output = ConnFinishedReason> + 'static
     where

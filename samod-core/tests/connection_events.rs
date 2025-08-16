@@ -148,9 +148,7 @@ fn doc_conn_state_updated_after_sync() {
         new_state,
     } = last_update_on_alice
     else {
-        panic!(
-            "Expected a StateChanged event, got {last_update_on_alice:?}"
-        );
+        panic!("Expected a StateChanged event, got {last_update_on_alice:?}");
     };
     let doc_state = new_state.docs.get(&doc_id).unwrap();
     assert!(doc_state.last_sent.is_some());
@@ -168,9 +166,7 @@ fn doc_conn_state_updated_after_sync() {
         new_state,
     } = last_update_on_bob
     else {
-        panic!(
-            "Expected a StateChanged event, got {last_update_on_bob:?}"
-        );
+        panic!("Expected a StateChanged event, got {last_update_on_bob:?}");
     };
     let doc_state = new_state.docs.get(&doc_id).unwrap();
     assert!(doc_state.last_sent.is_some());
