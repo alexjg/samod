@@ -5,11 +5,12 @@ use futures::{Future, FutureExt, channel::oneshot};
 use crate::{
     ConnectionId,
     actors::{
-        driver::ActorIo,
+        driver::{ActorIo, DriverOutput},
         hub::{
             Hub,
             connection::Connection,
             io::{HubIoAction, HubIoResult},
+            run::HubOutput,
         },
     },
 };
@@ -38,6 +39,10 @@ impl IoAccess {
 
     fn dispatch_task(&self, task: HubIoAction) -> impl Future<Output = HubIoResult> + 'static {
         self.io.perform_io(task)
+    }
+
+    pub(crate) fn emit_event(&self, event: HubOutput) {
+        self.io.emit_event(event);
     }
 }
 

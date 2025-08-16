@@ -2,7 +2,10 @@ use std::collections::HashMap;
 
 use crate::{
     ConnectionId, DocumentId, PeerId, UnixTimestamp,
-    actors::{hub::task_context::IoAccess, messages::SyncMessage},
+    actors::{
+        hub::{HubResults, task_context::IoAccess},
+        messages::SyncMessage,
+    },
     network::{
         ConnDirection, ConnectionInfo, ConnectionState, PeerDocState, PeerMetadata,
         wire_protocol::WireMessage,
@@ -48,7 +51,7 @@ pub(crate) struct ConnectionArgs {
 impl Connection {
     /// Create a new connection in handshaking state.
     pub(crate) fn new_handshaking(
-        io: IoAccess,
+        out: &mut HubResults,
         ConnectionArgs {
             direction,
             local_peer_id,
@@ -70,7 +73,7 @@ impl Connection {
             conn.phase = ConnectionPhase::WaitingForPeer;
             tracing::trace!(conn_id=?conn.id, "sending join message");
             conn.send(
-                io,
+                out,
                 created_at,
                 WireMessage::Join {
                     sender_id: local_peer_id.clone(),
@@ -88,7 +91,7 @@ impl Connection {
 
     pub(crate) fn receive_msg(
         &mut self,
-        io: IoAccess,
+        out: &mut HubResults,
         now: UnixTimestamp,
         msg: WireMessage,
     ) -> Vec<ReceiveEvent> {
@@ -110,7 +113,7 @@ impl Connection {
                     if !supported_protocol_versions.contains(&"1".to_string()) {
                         tracing::warn!(conn_id=?self.id, "peer does not support protocol version 1");
                         self.send(
-                            io,
+                            out,
                             now,
                             WireMessage::Error {
                                 message: "unsupported protocol version".to_string(),
@@ -121,7 +124,7 @@ impl Connection {
                     }
                     tracing::trace!(conn_id=?self.id, "sending Peer message in response to Join");
                     self.send(
-                        io,
+                        out,
                         now,
                         WireMessage::Peer {
                             sender_id: self.local_peer_id.clone(),
@@ -148,7 +151,7 @@ impl Connection {
                         "unexpected message received in WaitingForJoin phase"
                     );
                     self.send(
-                        io,
+                        out,
                         now,
                         WireMessage::Error {
                             message: "expected a join message".to_string(),
@@ -202,7 +205,7 @@ impl Connection {
                         "unexpected message received in WaitingForPeer phase"
                     );
                     self.send(
-                        io,
+                        out,
                         now,
                         WireMessage::Error {
                             message: "expected a peer message".to_string(),
@@ -356,10 +359,10 @@ impl Connection {
         matches!(self.phase, ConnectionPhase::Closed)
     }
 
-    fn send(&mut self, io: IoAccess, now: UnixTimestamp, msg: WireMessage) {
+    fn send(&mut self, out: &mut HubResults, now: UnixTimestamp, msg: WireMessage) {
         self.dirty = true;
         self.last_sent = Some(now);
-        io.send(self, msg.encode());
+        out.send(self.id, msg.encode());
     }
 
     pub(crate) fn last_received(&self) -> Option<UnixTimestamp> {

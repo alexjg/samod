@@ -3,7 +3,6 @@ use std::sync::{Arc, Mutex};
 
 pub(crate) use command::Command;
 pub use command::{CommandId, CommandResult};
-mod command_handlers;
 mod connection;
 mod dispatched_command;
 pub use dispatched_command::DispatchedCommand;
@@ -134,6 +133,7 @@ impl Hub {
                 self.driver.handle_io_complete(now, result);
             }
             HubEventPayload::Input(input) => {
+                let state = self.state.lock().unwrap();
                 self.driver.handle_input(now, input);
             }
         }
