@@ -10,7 +10,7 @@ use crate::{
     network::ConnDirection,
 };
 
-use super::{DispatchedCommand, HubEventPayload, io::HubIoResult, run::HubInput};
+use super::{DispatchedCommand, HubEventPayload, HubInput, io::HubIoResult};
 
 /// An event that can be processed by the hub actor
 ///

@@ -1,6 +1,6 @@
 use crate::io::IoResult;
 
-use super::{io::HubIoResult, run::HubInput};
+use super::{HubInput, io::HubIoResult};
 
 #[derive(Debug)]
 pub(crate) enum HubEventPayload {

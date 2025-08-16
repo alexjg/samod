@@ -208,9 +208,8 @@ fn document_persistence_across_restart() {
         .samod(&bob)
         .with_document_by_actor(bob_actor_id, |doc| {
             println!("🔍 Bob's document keys: {:?}", doc.keys(automerge::ROOT));
-            
-            doc
-                .get(automerge::ROOT, "persistent_data")
+
+            doc.get(automerge::ROOT, "persistent_data")
                 .unwrap()
                 .map(|(value, _)| match value {
                     automerge::Value::Scalar(s) => match s.as_ref() {
@@ -335,9 +334,7 @@ fn request_document_before_connection() {
     let verification_result = network
         .samod(&bob)
         .with_document_by_actor(bob_actor_id, |doc| {
-            
-            doc
-                .get(automerge::ROOT, "delayed_sync")
+            doc.get(automerge::ROOT, "delayed_sync")
                 .unwrap()
                 .map(|(value, _)| match value {
                     automerge::Value::Scalar(s) => match s.as_ref() {

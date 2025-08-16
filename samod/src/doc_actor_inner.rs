@@ -4,7 +4,7 @@ use samod_core::{
     DocumentActorId, DocumentChanged, DocumentId, UnixTimestamp,
     actors::{
         DocToHubMsg,
-        document::{ActorResult, DocumentActor, WithDocResult},
+        document::{DocActorResult, DocumentActor, WithDocResult},
     },
 };
 
@@ -73,12 +73,13 @@ impl DocActorInner {
         self.handle_results(result);
     }
 
-    pub(crate) fn handle_results(&mut self, results: ActorResult) {
-        let ActorResult {
+    pub(crate) fn handle_results(&mut self, results: DocActorResult) {
+        let DocActorResult {
             io_tasks,
             outgoing_messages,
             ephemeral_messages,
             change_events,
+            stopped: _,
         } = results;
         for task in io_tasks {
             let _ = self
@@ -128,5 +129,9 @@ impl DocActorInner {
                 .handle_io_complete(UnixTimestamp::now(), io_result),
         };
         self.handle_results(result.unwrap());
+    }
+
+    pub(crate) fn is_stopped(&self) -> bool {
+        self.actor.is_stopped()
     }
 }

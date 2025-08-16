@@ -1,4 +1,10 @@
-use crate::actors::messages::{DocMessage, HubToDocMsgPayload};
+use crate::{
+    actors::{
+        document::io::DocumentIoResult,
+        messages::{DocMessage, HubToDocMsgPayload},
+    },
+    io::IoResult,
+};
 
 /// Internal input messages for the async actor runtime.
 ///
@@ -19,6 +25,7 @@ pub(crate) enum ActorInput {
     ConnectionClosed {
         connection_id: crate::ConnectionId,
     },
+    IoComplete(IoResult<DocumentIoResult>),
     Request,
     Tick,
 }

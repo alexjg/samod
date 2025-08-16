@@ -48,26 +48,21 @@ impl SamodWrapper {
 
     pub fn new_with_storage(nickname: String, mut storage: Storage) -> Self {
         let peer_id = PeerId::from_string(nickname.clone());
-        let mut loader = samod_core::SamodLoader::new(
-            rand::rngs::StdRng::from_rng(&mut rand::rng()),
-            peer_id,
-            UnixTimestamp::now(),
-        );
+        let mut loader = samod_core::SamodLoader::new(peer_id);
         let now = UnixTimestamp::now();
+
+        let mut rng = rand::rngs::StdRng::from_os_rng();
 
         // Execute the loading process
         let hub = loop {
-            match loader.step(now) {
+            match loader.step(&mut rng, now) {
                 samod_core::LoaderState::NeedIo(tasks) => {
                     for task in tasks {
                         let result = storage.handle_task(task.action);
-                        loader.provide_io_result(
-                            now,
-                            IoResult {
-                                task_id: task.task_id,
-                                payload: result,
-                            },
-                        );
+                        loader.provide_io_result(IoResult {
+                            task_id: task.task_id,
+                            payload: result,
+                        });
                     }
                 }
                 samod_core::LoaderState::Loaded(hub) => break hub,
@@ -75,7 +70,7 @@ impl SamodWrapper {
         };
 
         SamodWrapper {
-            hub,
+            hub: *hub,
             storage,
             inbox: VecDeque::new(),
             completed_commands: HashMap::new(),
@@ -204,7 +199,8 @@ impl SamodWrapper {
         }
         while let Some(event) = self.inbox.pop_front() {
             self.now += Duration::from_millis(10);
-            let results = self.hub.handle_event(self.now, event);
+            let mut rng = rand::rng();
+            let results = self.hub.handle_event(&mut rng, self.now, event);
             tracing::trace!(?results, "handled event");
 
             // Handle completed commands
@@ -423,5 +419,6 @@ impl SamodWrapper {
     pub fn stop(&mut self) {
         self.inbox.push_back(HubEvent::stop());
         self.handle_events();
+        assert!(self.hub.is_stopped());
     }
 }

@@ -1,13 +1,8 @@
-use std::sync::{Arc, Mutex};
-
 use crate::{
-    PeerId, UnixTimestamp,
-    actors::{
-        driver::{Driver, StepResult},
-        hub::Hub,
-        loading::{self, Loading},
-    },
-    io::{IoResult, IoTask, StorageResult, StorageTask},
+    PeerId, StorageId, StorageKey, UnixTimestamp,
+    actors::hub::{Hub, State as HubState},
+    ephemera::EphemeralSession,
+    io::{IoResult, IoTask, IoTaskId, StorageResult, StorageTask},
 };
 
 /// A state machine for loading a samod repository.
@@ -22,17 +17,17 @@ use crate::{
 /// use samod_core::{PeerId, SamodLoader, LoaderState, UnixTimestamp, io::{StorageResult, IoResult}};
 /// use rand::SeedableRng;
 ///
-/// let rng = rand::rngs::StdRng::from_rng(&mut rand::rng());
-/// let mut loader = SamodLoader::new(rng, PeerId::from("test"), UnixTimestamp::now());
+/// let mut rng = rand::rngs::StdRng::from_rng(&mut rand::rng());
+/// let mut loader = SamodLoader::new(PeerId::from("test"));
 ///
 /// loop {
-///     match loader.step(UnixTimestamp::now()) {
+///     match loader.step(&mut rng, UnixTimestamp::now()) {
 ///         LoaderState::NeedIo(tasks) => {
 ///             // Execute IO tasks and provide results
 ///             for task in tasks {
 ///                 // ... execute task ...
 ///                 # let result: IoResult<StorageResult> = todo!();
-///                 loader.provide_io_result(UnixTimestamp::now(), result);
+///                 loader.provide_io_result(result);
 ///             }
 ///         }
 ///         LoaderState::Loaded(samod) => {
@@ -42,8 +37,9 @@ use crate::{
 ///     }
 /// }
 /// ```
-pub struct SamodLoader<R> {
-    driver: Driver<Loading<R>>,
+pub struct SamodLoader {
+    local_peer_id: PeerId,
+    state: State,
 }
 
 /// The current state of the loader.
@@ -55,10 +51,18 @@ pub enum LoaderState {
     NeedIo(Vec<IoTask<StorageTask>>),
 
     /// Loading is complete and the samod repository is ready to use.
-    Loaded(Hub),
+    Loaded(Box<Hub>),
 }
 
-impl<R: rand::Rng + Clone + Send + Sync + 'static> SamodLoader<R> {
+enum State {
+    Starting,
+    LoadingStorageId(IoTaskId),
+    StorageIdLoaded(Option<Vec<u8>>),
+    PuttingStorageId(IoTaskId, StorageId),
+    Done(StorageId),
+}
+
+impl SamodLoader {
     /// Creates a new samod loader.
     ///
     /// # Arguments
@@ -68,10 +72,11 @@ impl<R: rand::Rng + Clone + Send + Sync + 'static> SamodLoader<R> {
     /// # Returns
     ///
     /// A new `SamodLoader` ready to begin the loading process.
-    pub fn new(rng: R, local_peer_id: PeerId, now: UnixTimestamp) -> Self {
-        let driver = Driver::spawn(now, |args| loading::load(rng, local_peer_id, args));
-
-        Self { driver }
+    pub fn new(local_peer_id: PeerId) -> Self {
+        Self {
+            local_peer_id,
+            state: State::Starting,
+        }
     }
 
     /// Advances the loader state machine.
@@ -87,21 +92,54 @@ impl<R: rand::Rng + Clone + Send + Sync + 'static> SamodLoader<R> {
     /// # Returns
     ///
     /// The current state of the loader.
-    pub fn step(&mut self, now: UnixTimestamp) -> LoaderState {
-        let new_tasks = match self.driver.step(now) {
-            StepResult::Suspend(tasks) => tasks,
-            StepResult::Complete {
-                results,
-                complete: (hub_state, rng),
-            } => {
-                assert!(results.is_empty());
-                let state = Arc::new(Mutex::new(hub_state));
-                let hub = Hub::new(rng, now, state);
-                return LoaderState::Loaded(hub);
+    pub fn step<R: rand::Rng>(&mut self, rng: &mut R, _now: UnixTimestamp) -> LoaderState {
+        match &self.state {
+            State::Starting => {
+                let task = IoTask::new(StorageTask::Load {
+                    key: StorageKey::storage_id_path(),
+                });
+                self.state = State::LoadingStorageId(task.task_id);
+                LoaderState::NeedIo(vec![task])
             }
-        };
-
-        LoaderState::NeedIo(new_tasks)
+            State::LoadingStorageId(_task_id) => LoaderState::NeedIo(Vec::new()),
+            State::StorageIdLoaded(result) => {
+                if let Some(result) = result {
+                    match String::from_utf8(result.to_vec()) {
+                        Ok(s) => {
+                            let storage_id = StorageId::from(s);
+                            self.state = State::Done(storage_id.clone());
+                            let state = HubState::new(
+                                storage_id,
+                                self.local_peer_id.clone(),
+                                EphemeralSession::new(rng),
+                            );
+                            return LoaderState::Loaded(Box::new(Hub::new(state)));
+                        }
+                        Err(_e) => {
+                            tracing::warn!("storage ID was not a valid string, creating a new one");
+                        }
+                    }
+                } else {
+                    tracing::info!("no storage ID found, generating a new one");
+                }
+                let storage_id = StorageId::new(rng);
+                let task = IoTask::new(StorageTask::Put {
+                    key: StorageKey::storage_id_path(),
+                    value: storage_id.as_str().as_bytes().to_vec(),
+                });
+                self.state = State::PuttingStorageId(task.task_id, storage_id);
+                LoaderState::NeedIo(vec![task])
+            }
+            State::PuttingStorageId(_task_id, _storage_id) => LoaderState::NeedIo(Vec::new()),
+            State::Done(storage_id) => {
+                let state = HubState::new(
+                    storage_id.clone(),
+                    self.local_peer_id.clone(),
+                    EphemeralSession::new(rng),
+                );
+                LoaderState::Loaded(Box::new(Hub::new(state)))
+            }
+        }
     }
 
     /// Provides the result of an IO operation.
@@ -112,7 +150,37 @@ impl<R: rand::Rng + Clone + Send + Sync + 'static> SamodLoader<R> {
     /// # Arguments
     ///
     /// * `result` - The result of executing an IO task
-    pub fn provide_io_result(&mut self, now: UnixTimestamp, result: IoResult<StorageResult>) {
-        self.driver.handle_io_complete(now, result);
+    pub fn provide_io_result(&mut self, result: IoResult<StorageResult>) {
+        match self.state {
+            State::Starting | State::Done(_) | State::StorageIdLoaded(_) => {
+                panic!("unexpected IO completion");
+            }
+            State::LoadingStorageId(io_task_id) => {
+                if io_task_id != result.task_id {
+                    panic!(
+                        "unexpected task ID: expected {:?}, got {:?}",
+                        io_task_id, result.task_id
+                    );
+                }
+                match result.payload {
+                    StorageResult::Load { value } => {
+                        self.state = State::StorageIdLoaded(value);
+                    }
+                    _ => panic!("unexpected storage result when loading storage ID"),
+                }
+            }
+            State::PuttingStorageId(io_task_id, ref storage_id) => {
+                if io_task_id != result.task_id {
+                    panic!(
+                        "unexpected task ID: expected {:?}, got {:?}",
+                        io_task_id, result.task_id
+                    );
+                }
+                match result.payload {
+                    StorageResult::Put => self.state = State::Done(storage_id.clone()),
+                    _ => panic!("unexpected storage result when putting storage ID"),
+                }
+            }
+        }
     }
 }

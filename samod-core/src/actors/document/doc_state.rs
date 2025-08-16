@@ -3,36 +3,26 @@ use std::collections::HashMap;
 use automerge::Automerge;
 
 use crate::{
-    ConnectionId, DocumentId, PeerId, StorageKey, UnixTimestamp,
+    ConnectionId, DocumentId, StorageKey, UnixTimestamp,
     actors::{
-        RunState,
+        document::DocActorResult,
         messages::{Broadcast, DocMessage, DocToHubMsgPayload, SyncMessage},
     },
-    network::PeerDocState,
 };
 
 use super::{
-    ActorIoAccess, DocumentError, DocumentStatus,
-    compaction::{self, SaveState},
+    DocumentStatus,
     peer_doc_connection::{AnnouncePolicy, PeerDocConnection},
     ready::Ready,
     request::{Request, RequestState},
 };
 
-/// The internal state of the async actor runtime.
-///
-/// This holds the document and any other state needed by the async operations.
 #[derive(Debug)]
-pub(super) struct ActorState {
-    pub phase: Phase,
+pub(super) struct DocState {
+    phase: Phase,
     /// The document ID
-    pub document_id: DocumentId,
-    local_peer_id: PeerId,
+    document_id: DocumentId,
     doc: Automerge,
-    /// Sync states for each connected peer
-    peer_connections: HashMap<ConnectionId, PeerDocConnection>,
-    save_state: SaveState,
-    run_state: RunState,
 }
 
 #[derive(Debug)]
@@ -54,52 +44,44 @@ enum PhaseTransition {
     ToLoading,
 }
 
-impl ActorState {
-    pub fn new_loading(document_id: DocumentId, local_peer_id: PeerId, doc: Automerge) -> Self {
+impl DocState {
+    pub fn new_loading(document_id: DocumentId, doc: Automerge) -> Self {
         Self {
             phase: Phase::Loading {
                 pending_sync_messages: HashMap::new(),
             },
             document_id,
-            local_peer_id,
             doc,
-            peer_connections: HashMap::new(),
-            save_state: SaveState::new(),
-            run_state: RunState::Running,
         }
     }
 
-    pub fn new_ready(document_id: DocumentId, local_peer_id: PeerId, doc: Automerge) -> Self {
+    pub fn new_ready(document_id: DocumentId, doc: Automerge) -> Self {
         Self {
             phase: Phase::Ready(Ready::new()),
             document_id,
-            local_peer_id,
             doc,
-            peer_connections: HashMap::new(),
-            save_state: SaveState::new(),
-            run_state: RunState::Running,
         }
     }
 
-    fn handle_phase_transition(&mut self, io: ActorIoAccess, transition: PhaseTransition) {
+    fn handle_phase_transition(&mut self, out: &mut DocActorResult, transition: PhaseTransition) {
         match transition {
             PhaseTransition::None => {}
             PhaseTransition::ToReady => {
                 tracing::trace!("transitioning to ready");
-                io.send_message(DocToHubMsgPayload::DocumentStatusChanged {
+                out.send_message(DocToHubMsgPayload::DocumentStatusChanged {
                     new_status: DocumentStatus::Ready,
                 });
-                io.emit_doc_changed(self.doc.get_heads());
+                out.emit_doc_changed(self.doc.get_heads());
                 self.phase = Phase::Ready(Ready::new());
             }
             PhaseTransition::ToNotFound => {
                 tracing::trace!("transitioning to NotFound");
-                io.send_message(DocToHubMsgPayload::DocumentStatusChanged {
+                out.send_message(DocToHubMsgPayload::DocumentStatusChanged {
                     new_status: DocumentStatus::NotFound,
                 });
                 if let Phase::Requesting(request) = &self.phase {
                     for peer in request.peers_waiting_for_us_to_respond() {
-                        io.send_message(DocToHubMsgPayload::SendSyncMessage {
+                        out.send_message(DocToHubMsgPayload::SendSyncMessage {
                             connection_id: peer,
                             document_id: self.document_id.clone(),
                             message: SyncMessage::DocUnavailable,
@@ -110,14 +92,14 @@ impl ActorState {
             }
             PhaseTransition::ToRequesting(request) => {
                 tracing::trace!("transitioning to requesting");
-                io.send_message(DocToHubMsgPayload::DocumentStatusChanged {
+                out.send_message(DocToHubMsgPayload::DocumentStatusChanged {
                     new_status: DocumentStatus::Requesting,
                 });
                 self.phase = Phase::Requesting(request);
             }
             PhaseTransition::ToLoading => {
                 tracing::trace!("transitioning to loading");
-                io.send_message(DocToHubMsgPayload::DocumentStatusChanged {
+                out.send_message(DocToHubMsgPayload::DocumentStatusChanged {
                     new_status: DocumentStatus::Loading,
                 });
                 self.phase = Phase::Loading {
@@ -147,34 +129,34 @@ impl ActorState {
     pub fn handle_load(
         &mut self,
         now: UnixTimestamp,
-        io: ActorIoAccess,
-        snapshots: HashMap<StorageKey, Vec<u8>>,
-        incrementals: HashMap<StorageKey, Vec<u8>>,
+        out: &mut DocActorResult,
+        peer_connections: &mut HashMap<ConnectionId, PeerDocConnection>,
+        snapshots: &HashMap<StorageKey, Vec<u8>>,
+        incrementals: &HashMap<StorageKey, Vec<u8>>,
     ) {
         tracing::trace!("handling load");
-        for (key, snapshot) in &snapshots {
+        for (key, snapshot) in snapshots {
             if let Err(e) = self.doc.load_incremental(snapshot) {
                 tracing::warn!(err=?e, %key, "error loading snapshot chunk");
             }
         }
-        for (key, incremental) in &incrementals {
+        for (key, incremental) in incrementals {
             if let Err(e) = self.doc.load_incremental(incremental) {
                 tracing::warn!(err=?e, %key, "error loading incremental chunk");
             }
         }
-        self.save_state
-            .add_on_disk(snapshots.into_keys().chain(incrementals.into_keys()));
+        // self.save_state
+        //     .add_on_disk(snapshots.into_keys().chain(incrementals.into_keys()));
         if matches!(self.phase, Phase::Loading { .. }) {
             if self.doc.get_heads().is_empty() {
-                let eligible_conns = self
-                    .peer_connections
+                let eligible_conns = peer_connections
                     .values()
                     .any(|p| p.announce_policy() != AnnouncePolicy::DontAnnounce);
                 if !eligible_conns {
                     tracing::debug!(
                         "no data found on disk and no connections available, transitioning to NotFound"
                     );
-                    self.handle_phase_transition(io, PhaseTransition::ToNotFound);
+                    self.handle_phase_transition(out, PhaseTransition::ToNotFound);
                 } else {
                     tracing::debug!(
                         "no data found on disk but connections available, requesting document"
@@ -182,7 +164,7 @@ impl ActorState {
                     // We still don't have the doc, request it
                     let mut next_phase = Phase::Requesting(Request::new(
                         self.document_id.clone(),
-                        self.peer_connections.values(),
+                        peer_connections.values(),
                     ));
                     std::mem::swap(&mut self.phase, &mut next_phase);
                     let Phase::Loading {
@@ -193,10 +175,10 @@ impl ActorState {
                     };
                     for (conn_id, msgs) in pending_sync_messages {
                         for msg in msgs {
-                            self.handle_sync_message(now, io.clone(), conn_id, msg);
+                            self.handle_sync_message(now, out, conn_id, peer_connections, msg);
                         }
                     }
-                    io.send_message(DocToHubMsgPayload::DocumentStatusChanged {
+                    out.send_message(DocToHubMsgPayload::DocumentStatusChanged {
                         new_status: DocumentStatus::Requesting,
                     });
                 }
@@ -213,33 +195,24 @@ impl ActorState {
             else {
                 unreachable!("we already checked");
             };
-            io.send_message(DocToHubMsgPayload::DocumentStatusChanged {
+            out.send_message(DocToHubMsgPayload::DocumentStatusChanged {
                 new_status: DocumentStatus::Ready,
             });
             for (conn_id, msgs) in pending_sync_messages {
                 for msg in msgs {
-                    self.handle_sync_message(now, io.clone(), conn_id, msg);
+                    self.handle_sync_message(now, out, conn_id, peer_connections, msg);
                 }
             }
         }
     }
 
-    pub fn add_connection(&mut self, conn_id: ConnectionId, peer_id: PeerId) {
-        assert!(
-            !self.peer_connections.contains_key(&conn_id),
-            "Connection ID already exists"
-        );
-        let conn = self
-            .peer_connections
-            .entry(conn_id)
-            .insert_entry(PeerDocConnection::new(peer_id, conn_id));
+    pub(crate) fn add_connection(&mut self, conn: &PeerDocConnection) {
         if let Phase::Requesting(request) = &mut self.phase {
-            request.add_connection(conn.get())
+            request.add_connection(conn)
         }
     }
 
-    pub fn remove_connection(&mut self, conn_id: ConnectionId) {
-        self.peer_connections.remove(&conn_id);
+    pub(crate) fn remove_connection(&mut self, conn_id: ConnectionId) {
         if let Phase::Requesting(request) = &mut self.phase {
             request.remove_connection(conn_id)
         }
@@ -248,32 +221,45 @@ impl ActorState {
     pub fn handle_doc_message(
         &mut self,
         now: UnixTimestamp,
-        io: ActorIoAccess,
+        out: &mut DocActorResult,
         connection_id: ConnectionId,
+        peer_connections: &mut HashMap<ConnectionId, PeerDocConnection>,
         msg: DocMessage,
     ) {
         match msg {
             DocMessage::Ephemeral(msg) => {
-                io.emit_ephemeral_message(msg.data.clone());
+                out.emit_ephemeral_message(msg.data.clone());
                 // Forward the message to all other connections
-                let targets = self.broadcast_targets(vec![msg.sender_id.clone()]);
-                io.send_message(DocToHubMsgPayload::Broadcast {
+                let targets = peer_connections
+                    .iter()
+                    .filter_map(|(c, conn)| {
+                        if conn.peer_id != msg.sender_id {
+                            Some(*c)
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                out.send_message(DocToHubMsgPayload::Broadcast {
                     connections: targets,
                     msg: Broadcast::Gossip { msg },
                 });
             }
-            DocMessage::Sync(msg) => self.handle_sync_message(now, io, connection_id, msg),
+            DocMessage::Sync(msg) => {
+                self.handle_sync_message(now, out, connection_id, peer_connections, msg)
+            }
         };
     }
 
     fn handle_sync_message(
         &mut self,
         now: UnixTimestamp,
-        io: ActorIoAccess,
+        out: &mut DocActorResult,
         connection_id: ConnectionId,
+        peer_connections: &mut HashMap<ConnectionId, PeerDocConnection>,
         msg: SyncMessage,
     ) {
-        let Some(peer_conn) = self.peer_connections.get_mut(&connection_id) else {
+        let Some(peer_conn) = peer_connections.get_mut(&connection_id) else {
             tracing::warn!(?connection_id, "no sync state found for message");
             return;
         };
@@ -298,43 +284,52 @@ impl ActorState {
                 ready.receive_sync_message(now, &mut self.doc, peer_conn, msg);
                 let heads_after = self.doc.get_heads();
                 if heads_before != heads_after {
-                    io.emit_doc_changed(heads_after);
+                    out.emit_doc_changed(heads_after);
                 }
                 PhaseTransition::None
             }
             Phase::NotFound => match msg {
                 SyncMessage::Request { data } => {
                     tracing::trace!("received request whilst in notfound, restarting request");
-                    let request =
-                        Request::new(self.document_id.clone(), self.peer_connections.values());
+                    let request = Request::new(self.document_id.clone(), peer_connections.values());
                     // Apply transition first, then reprocess the message
-                    self.handle_phase_transition(
-                        io.clone(),
-                        PhaseTransition::ToRequesting(request),
+                    self.handle_phase_transition(out, PhaseTransition::ToRequesting(request));
+                    self.handle_sync_message(
+                        now,
+                        out,
+                        connection_id,
+                        peer_connections,
+                        SyncMessage::Request { data },
                     );
-                    self.handle_sync_message(now, io, connection_id, SyncMessage::Request { data });
                     return;
                 }
                 SyncMessage::Sync { data } => {
                     tracing::trace!("received sync whilst in notfound, moving to ready");
                     // Apply transition first, then reprocess the message
-                    self.handle_phase_transition(io.clone(), PhaseTransition::ToReady);
-                    self.handle_sync_message(now, io, connection_id, SyncMessage::Sync { data });
+                    self.handle_phase_transition(out, PhaseTransition::ToReady);
+                    self.handle_sync_message(
+                        now,
+                        out,
+                        connection_id,
+                        peer_connections,
+                        SyncMessage::Sync { data },
+                    );
                     return;
                 }
                 SyncMessage::DocUnavailable => PhaseTransition::None,
             },
         };
 
-        self.handle_phase_transition(io, transition);
+        self.handle_phase_transition(out, transition);
     }
 
     pub fn generate_sync_messages(
         &mut self,
         now: UnixTimestamp,
+        peer_connections: &mut HashMap<ConnectionId, PeerDocConnection>,
     ) -> HashMap<ConnectionId, Vec<SyncMessage>> {
         let mut result: HashMap<ConnectionId, Vec<SyncMessage>> = HashMap::new();
-        for (conn_id, peer_conn) in &mut self.peer_connections {
+        for (conn_id, peer_conn) in peer_connections {
             match &mut self.phase {
                 Phase::Loading { .. } | Phase::NotFound => {}
                 Phase::Requesting(request) => {
@@ -354,87 +349,42 @@ impl ActorState {
         result
     }
 
-    pub fn broadcast_targets(&self, omitting_peer_ids: Vec<PeerId>) -> Vec<ConnectionId> {
-        self.peer_connections
-            .iter()
-            .filter(|(_conn_id, conn)| !omitting_peer_ids.contains(&conn.peer_id))
-            .map(|(conn_id, _)| *conn_id)
-            .collect()
-    }
-
-    pub fn ensure_request(&mut self, io: ActorIoAccess) {
+    /// If the document is in a `NotFound` phase, re-request it from everyone we
+    /// know of, otherwise don't do anything
+    pub(crate) fn request_if_not_already_available(
+        &mut self,
+        out: &mut DocActorResult,
+        peer_connections: &mut HashMap<ConnectionId, PeerDocConnection>,
+    ) {
         if let Phase::NotFound = self.phase {
             tracing::debug!("reloading document actor");
 
             // We re-load, then re-request. This means we need to reset all of our sync states
-            for peer_conn in self.peer_connections.values_mut() {
+            for peer_conn in peer_connections.values_mut() {
                 peer_conn.reset_sync_state();
             }
-            self.handle_phase_transition(io, PhaseTransition::ToLoading);
+            self.handle_phase_transition(out, PhaseTransition::ToLoading);
         }
     }
 
-    pub fn document(&mut self) -> Result<&mut automerge::Automerge, DocumentError> {
-        if let Phase::Ready(_) = self.phase {
-            Ok(&mut self.doc)
-        } else {
-            Err(DocumentError::DocumentNotReady)
-        }
+    pub(crate) fn is_ready(&self) -> bool {
+        matches!(self.phase, Phase::Ready(_))
     }
 
-    pub fn is_loading(&self) -> bool {
-        matches!(self.phase, Phase::Loading { .. })
+    pub(crate) fn document_mut(&mut self) -> &mut automerge::Automerge {
+        &mut self.doc
     }
 
-    pub fn local_peer_id(&self) -> &PeerId {
-        &self.local_peer_id
+    pub(crate) fn document(&self) -> &automerge::Automerge {
+        &self.doc
     }
 
-    pub fn pop_new_jobs(&mut self) -> Vec<compaction::Job> {
-        self.save_state.pop_new_jobs(&self.document_id, &self.doc)
-    }
-
-    pub fn mark_job_complete(&mut self, completion: compaction::JobComplete) {
-        self.save_state.mark_job_complete(completion);
-    }
-
-    pub fn pop_new_peer_states(&mut self) -> Option<HashMap<ConnectionId, PeerDocState>> {
-        let states = self
-            .peer_connections
-            .iter_mut()
-            .filter_map(|(conn_id, conn)| conn.pop().map(|state| (*conn_id, state)))
-            .collect::<HashMap<_, _>>();
-        if states.is_empty() {
-            None
-        } else {
-            Some(states)
-        }
-    }
-
-    pub fn pop_announce_policy_tasks(&mut self) -> Vec<(PeerId, ConnectionId)> {
-        let mut tasks = Vec::new();
-        for peer_conn in self.peer_connections.values_mut() {
-            if peer_conn.announce_policy() == AnnouncePolicy::Unknown {
-                tasks.push((peer_conn.peer_id.clone(), peer_conn.connection_id));
-                peer_conn.set_announce_policy(AnnouncePolicy::Loading);
-            }
-        }
-        tasks
-    }
-
-    pub fn set_announce_policy(
+    pub(crate) fn set_announce_policy(
         &mut self,
-        io: ActorIoAccess,
+        out: &mut DocActorResult,
         connection_id: ConnectionId,
         policy: AnnouncePolicy,
     ) {
-        let Some(peer_conn) = self.peer_connections.get_mut(&connection_id) else {
-            tracing::warn!(?connection_id, "set_announce_policy for unknown connection");
-            return;
-        };
-
-        peer_conn.set_announce_policy(policy);
-
         let transition = if let Phase::Requesting(request) = &mut self.phase {
             request.announce_policy_changed(connection_id, policy);
             self.check_request_completion()
@@ -442,14 +392,6 @@ impl ActorState {
             PhaseTransition::None
         };
 
-        self.handle_phase_transition(io, transition);
-    }
-
-    pub fn run_state(&self) -> RunState {
-        self.run_state
-    }
-
-    pub fn set_run_state(&mut self, run_state: RunState) {
-        self.run_state = run_state;
+        self.handle_phase_transition(out, transition);
     }
 }

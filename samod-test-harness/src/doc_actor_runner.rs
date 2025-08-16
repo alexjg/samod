@@ -6,7 +6,7 @@ use samod_core::{
     actors::{
         DocToHubMsg, HubToDocMsg,
         document::{
-            ActorResult, DocumentActor, DocumentError, SpawnArgs, WithDocResult,
+            DocActorResult, DocumentActor, DocumentError, SpawnArgs, WithDocResult,
             io::{DocumentIoResult, DocumentIoTask},
         },
     },
@@ -87,12 +87,13 @@ impl DocActorRunner {
         }
     }
 
-    fn enqueue_events(&mut self, result: ActorResult) {
-        let ActorResult {
+    fn enqueue_events(&mut self, result: DocActorResult) {
+        let DocActorResult {
             io_tasks,
             outgoing_messages,
             ephemeral_messages,
             change_events,
+            stopped: _,
         } = result;
         for task in io_tasks {
             self.inbox.push_back(ActorEvent::Io(task));
