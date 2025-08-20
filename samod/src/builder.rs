@@ -7,6 +7,7 @@ use crate::{
     storage::{InMemoryStorage, Storage},
 };
 
+/// A struct for configuring a [`Repo`](crate::Repo)
 pub struct RepoBuilder<S, R, A> {
     pub(crate) storage: S,
     pub(crate) runtime: R,
@@ -63,6 +64,7 @@ impl<R> RepoBuilder<InMemoryStorage, R, AlwaysAnnounce> {
 }
 
 impl<S: Storage, R: RuntimeHandle, A: AnnouncePolicy> RepoBuilder<S, R, A> {
+    /// Create the repository
     pub async fn load(self) -> Repo {
         Repo::load(self).await
     }

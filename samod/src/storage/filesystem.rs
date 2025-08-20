@@ -26,6 +26,9 @@ pub mod tokio {
 
     use super::key_to_path;
 
+    /// An implementation of [`Storage`] which stores data in the file system and uses the tokio event loop for dispatch
+    ///
+    /// This implementation is compatible with the format the automerge-repo-storage-nodefs package uses
     #[derive(Clone, Debug)]
     pub struct FilesystemStorage {
         data_dir: PathBuf,
@@ -135,6 +138,9 @@ pub mod gio {
 
     use super::key_to_path;
 
+    /// An implementation of [`Storage`] which stores data in the file system and uses the gio event loop for dispatch
+    ///
+    /// This implementation is compatible with the format the automerge-repo-storage-nodefs package uses
     #[derive(Clone, Debug)]
     pub struct FilesystemStorage {
         data_dir: PathBuf,
