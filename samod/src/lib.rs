@@ -249,11 +249,53 @@ impl Repo {
         }
     }
 
-    // Connect a new peer
-    //
-    // The future returned by this method must be driven to completion in order
-    // to continue processing the messages sent by the peer. If the future is
-    // dropped, the connection will be closed.
+    /// Connect a tokio IO stream to the repo
+    ///
+    /// This is a convenience wrapper which uses tokio_util's length delimited
+    /// codec to frame the io and passes it to [`Repo::connect`]. As with
+    /// [`Repo::connect`] the returned future must be driven to completion to
+    /// keep the connection alive and the `ConnFinishedReason` returned
+    /// indicates why the connection ended.
+    ///
+    /// ## Example
+    ///
+    /// ```rust,no_run
+    /// # #[cfg(feature="tokio")]
+    /// # async fn dosomething() {
+    /// use samod::ConnDirection;
+    ///
+    /// let repo: samod::Repo = todo!();
+    /// let io = tokio::net::TcpStream::connect("sync.automerge.org").await.unwrap();
+    /// tokio::spawn(repo.connect_tokio_io(io, ConnDirection::Outgoing));
+    /// # }
+    /// ```
+    #[cfg(feature = "tokio")]
+    pub fn connect_tokio_io<Io: tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + 'static>(
+        &self,
+        io: Io,
+        direction: ConnDirection,
+    ) -> impl Future<Output = ConnFinishedReason> + 'static {
+        let framed =
+            tokio_util::codec::Framed::new(io, tokio_util::codec::LengthDelimitedCodec::new());
+        let (write_half, read_half) = framed.split();
+        let write_half = write_half
+            .with::<Vec<u8>, _, _, std::io::Error>(|msg| std::future::ready(Ok(msg.into())));
+        let read_half = read_half.map(|res| match res {
+            Ok(bytes) => Ok(bytes.to_vec()),
+            Err(e) => Err(e),
+        });
+        self.connect(read_half, write_half, direction)
+    }
+
+    /// Connect a new peer
+    ///
+    /// The future returned by this method must be driven to completion in order
+    /// to continue processing the messages sent by the peer. If the future is
+    /// dropped, the connection will be closed.
+    ///
+    /// The returned future willl resolve to a [`ConnFinishedReason`] indicating why
+    /// the connection ended, this can be used to determine whether to attempt to
+    /// reconnect.
     #[tracing::instrument(skip(self, stream, sink), fields(local_peer_id = tracing::field::Empty))]
     pub fn connect<Str, Snk, SendErr, RecvErr>(
         &self,
