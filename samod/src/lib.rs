@@ -507,6 +507,7 @@ impl Inner {
         }
     }
 
+    #[tracing::instrument(skip(self, args))]
     fn spawn_actor(&mut self, args: SpawnArgs) {
         let (tx, rx) = std_mpsc::channel();
         let actor_id = args.actor_id();
@@ -530,7 +531,9 @@ impl Inner {
             },
         );
 
+        let span = tracing::Span::current();
         self.workers.spawn(move || {
+            let _enter = span.enter();
             doc_inner.lock().unwrap().handle_results(init_results);
 
             while let Ok(actor_task) = rx.recv() {

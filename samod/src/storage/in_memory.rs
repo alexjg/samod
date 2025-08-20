@@ -23,10 +23,12 @@ impl Default for InMemoryStorage {
 }
 
 impl Storage for InMemoryStorage {
+    #[tracing::instrument(skip(self), level = "trace", ret)]
     fn load(&self, key: StorageKey) -> impl Future<Output = Option<Vec<u8>>> + Send {
         futures::future::ready(self.0.lock().unwrap().get(&key).cloned())
     }
 
+    #[tracing::instrument(skip(self), level = "trace", ret)]
     fn load_range(
         &self,
         prefix: StorageKey,
@@ -42,11 +44,13 @@ impl Storage for InMemoryStorage {
         )
     }
 
+    #[tracing::instrument(skip(self, data), level = "trace")]
     fn put(&self, key: StorageKey, data: Vec<u8>) -> impl Future<Output = ()> + Send {
         self.0.lock().unwrap().insert(key, data);
         futures::future::ready(())
     }
 
+    #[tracing::instrument(skip(self), level = "trace")]
     fn delete(&self, key: StorageKey) -> impl Future<Output = ()> + Send {
         self.0.lock().unwrap().remove(&key);
         futures::future::ready(())
