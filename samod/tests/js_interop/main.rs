@@ -2,7 +2,7 @@ use std::{sync::Arc, time::Duration};
 
 use automerge::{Automerge, ReadDoc, transaction::Transactable};
 use futures::{StreamExt, lock::Mutex};
-use samod::{ConnDirection, PeerId, Samod};
+use samod::{ConnDirection, PeerId, Repo};
 
 mod js_wrapper;
 use js_wrapper::JsWrapper;
@@ -132,8 +132,8 @@ async fn two_js_clients_can_send_ephemera_through_rust_server() {
     assert_eq!(msg, "hello");
 }
 
-async fn samod_connected_to_js_server(port: u16, peer_id: Option<String>) -> Samod {
-    let mut builder = Samod::build_tokio();
+async fn samod_connected_to_js_server(port: u16, peer_id: Option<String>) -> Repo {
+    let mut builder = Repo::build_tokio();
     if let Some(peer_id) = peer_id {
         builder = builder.with_peer_id(PeerId::from(peer_id.as_str()));
     }
@@ -154,13 +154,13 @@ async fn samod_connected_to_js_server(port: u16, peer_id: Option<String>) -> Sam
 struct RunningRustServer {
     port: u16,
     #[allow(dead_code)]
-    handle: Samod,
+    handle: Repo,
     #[allow(dead_code)]
     running_connections: Arc<Mutex<Vec<tokio::task::JoinHandle<()>>>>,
 }
 
 async fn start_rust_server() -> RunningRustServer {
-    let handle = Samod::build_tokio().load().await;
+    let handle = Repo::build_tokio().load().await;
     let running_connections = Arc::new(Mutex::new(Vec::new()));
     let app = axum::Router::new()
         .route("/", axum::routing::get(websocket_handler))
@@ -182,7 +182,7 @@ async fn start_rust_server() -> RunningRustServer {
 async fn websocket_handler(
     ws: axum::extract::ws::WebSocketUpgrade,
     axum::extract::State((handle, running_connections)): axum::extract::State<(
-        Samod,
+        Repo,
         Arc<Mutex<Vec<tokio::task::JoinHandle<()>>>>,
     )>,
 ) -> axum::response::Response {
@@ -191,7 +191,7 @@ async fn websocket_handler(
 
 async fn handle_socket(
     socket: axum::extract::ws::WebSocket,
-    repo: Samod,
+    repo: Repo,
     running_connections: Arc<Mutex<Vec<tokio::task::JoinHandle<()>>>>,
 ) {
     let driver = repo.accept_axum(socket);

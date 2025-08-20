@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 use futures::{FutureExt, Sink, SinkExt, Stream, StreamExt, future::join, select};
-use samod::{ConnDirection, Samod};
+use samod::{ConnDirection, Repo};
 use tokio::task::JoinHandle;
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::{CancellationToken, PollSender};
@@ -94,7 +94,7 @@ impl Connected {
     }
 }
 
-pub(crate) fn connect_repos(left: &Samod, right: &Samod) -> Connected {
+pub(crate) fn connect_repos(left: &Repo, right: &Repo) -> Connected {
     // This function connects two samod instances. We want to connect them in a
     // manner which allows us to simulate the loss of a connection. To do this
     // we create a "middle" process, then connect streams from the left and

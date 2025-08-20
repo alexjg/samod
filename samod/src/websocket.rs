@@ -1,6 +1,6 @@
 use futures::{Future, Sink, SinkExt, Stream, StreamExt};
 
-use crate::{ConnDirection, ConnFinishedReason, Samod};
+use crate::{ConnDirection, ConnFinishedReason, Repo};
 
 /// A copy of tungstenite::Message
 ///
@@ -69,7 +69,7 @@ impl From<axum::extract::ws::Message> for WsMessage {
     }
 }
 
-impl Samod {
+impl Repo {
     /// Connect a websocket
     #[cfg(feature = "tungstenite")]
     pub fn connect_tungstenite<S>(

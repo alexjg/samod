@@ -49,19 +49,19 @@ pub mod runtime;
 mod websocket;
 
 #[derive(Clone)]
-pub struct Samod {
+pub struct Repo {
     inner: Arc<Mutex<Inner>>,
 }
 
-impl Samod {
-    // Create a new `Samod` instance which spawns its tasks onto the provided runtime
+impl Repo {
+    // Create a new [`Repo`] instance which spawns its tasks onto the provided runtime
     pub fn builder<R: runtime::RuntimeHandle>(
         runtime: R,
     ) -> SamodBuilder<InMemoryStorage, R, AlwaysAnnounce> {
         builder::SamodBuilder::new(runtime)
     }
 
-    // Create a new `Samod` instance which spawns it's tasks onto the current tokio runtime
+    // Create a new [`Repo`] instance which spawns it's tasks onto the current tokio runtime
     #[cfg(feature = "tokio")]
     pub fn build_tokio() -> SamodBuilder<InMemoryStorage, ::tokio::runtime::Handle, AlwaysAnnounce>
     {
@@ -550,9 +550,9 @@ mod tests {
     #[test]
     fn make_sure_it_is_send() {
         assert_send::<super::storage::InMemoryStorage>(PhantomData);
-        assert_send::<super::Samod>(PhantomData);
+        assert_send::<super::Repo>(PhantomData);
 
         #[cfg(feature = "tokio")]
-        assert_send_value(|| crate::Samod::build_tokio().load());
+        assert_send_value(|| crate::Repo::build_tokio().load());
     }
 }

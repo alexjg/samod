@@ -1,7 +1,7 @@
 use samod_core::PeerId;
 
 use crate::{
-    Samod,
+    Repo,
     announce_policy::{AlwaysAnnounce, AnnouncePolicy},
     runtime::RuntimeHandle,
     storage::{InMemoryStorage, Storage},
@@ -63,7 +63,7 @@ impl<R> SamodBuilder<InMemoryStorage, R, AlwaysAnnounce> {
 }
 
 impl<S: Storage, R: RuntimeHandle, A: AnnouncePolicy> SamodBuilder<S, R, A> {
-    pub async fn load(self) -> Samod {
-        Samod::load(self).await
+    pub async fn load(self) -> Repo {
+        Repo::load(self).await
     }
 }

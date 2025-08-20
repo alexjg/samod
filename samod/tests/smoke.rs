@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use automerge::Automerge;
-use samod::{PeerId, Samod, storage::InMemoryStorage};
+use samod::{PeerId, Repo, storage::InMemoryStorage};
 mod tincans;
 
 fn init_logging() {
@@ -16,7 +16,7 @@ fn init_logging() {
 async fn smoke() {
     init_logging();
     let storage = InMemoryStorage::new();
-    let samod = Samod::build_tokio()
+    let samod = Repo::build_tokio()
         .with_storage(storage.clone())
         .load()
         .await;
@@ -34,7 +34,7 @@ async fn smoke() {
         .unwrap();
     });
 
-    let new_samod = Samod::build_tokio().with_storage(storage).load().await;
+    let new_samod = Repo::build_tokio().with_storage(storage).load().await;
     let handle2 = new_samod.find(doc.document_id().clone()).await.unwrap();
     assert!(handle2.is_some());
 }
@@ -45,12 +45,12 @@ async fn basic_sync() {
 
     init_logging();
 
-    let alice = Samod::build_tokio()
+    let alice = Repo::build_tokio()
         .with_peer_id(PeerId::from("alice"))
         .load()
         .await;
 
-    let bob = Samod::build_tokio()
+    let bob = Repo::build_tokio()
         .with_peer_id(PeerId::from("bob"))
         .load()
         .await;
@@ -81,13 +81,13 @@ async fn basic_sync() {
 async fn non_announcing_peers_dont_sync() {
     init_logging();
 
-    let alice = Samod::build_tokio()
+    let alice = Repo::build_tokio()
         .with_peer_id(PeerId::from("alice"))
         .with_announce_policy(|_doc_id, _peer_id| false)
         .load()
         .await;
 
-    let bob = Samod::build_tokio()
+    let bob = Repo::build_tokio()
         .with_peer_id(PeerId::from("bob"))
         .load()
         .await;
@@ -129,12 +129,12 @@ async fn ephemera_smoke() {
 
     init_logging();
 
-    let alice = Samod::build_tokio()
+    let alice = Repo::build_tokio()
         .with_peer_id(PeerId::from("alice"))
         .load()
         .await;
 
-    let bob = Samod::build_tokio()
+    let bob = Repo::build_tokio()
         .with_peer_id(PeerId::from("bob"))
         .load()
         .await;
@@ -178,12 +178,12 @@ async fn change_listeners_smoke() {
     use std::sync::{Arc, Mutex};
     init_logging();
 
-    let alice = Samod::build_tokio()
+    let alice = Repo::build_tokio()
         .with_peer_id(PeerId::from("alice"))
         .load()
         .await;
 
-    let bob = Samod::build_tokio()
+    let bob = Repo::build_tokio()
         .with_peer_id(PeerId::from("bob"))
         .load()
         .await;
