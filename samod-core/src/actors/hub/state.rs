@@ -369,9 +369,9 @@ impl State {
                         if self.run_state == RunState::Running
                             && let Some(result) =
                                 self.handle_command(rng, now, results, command_id, *command)
-                            {
-                                results.completed_commands.insert(command_id, result);
-                            }
+                        {
+                            results.completed_commands.insert(command_id, result);
+                        }
                     }
                     HubInput::Tick => {
                         // Tick events are used to trigger periodic processing
@@ -467,8 +467,13 @@ impl State {
             results.completed_commands.insert(command_id, result);
         }
 
-        if self.run_state == RunState::Stopping && self.actors.is_empty() {
-            self.run_state = RunState::Stopped;
+        if self.run_state == RunState::Stopping {
+            if self.actors.is_empty() {
+                tracing::debug!("hub stopped");
+                self.run_state = RunState::Stopped;
+            } else {
+                tracing::debug!(remaining_actors = self.actors.len(), "hub still stopping");
+            }
         }
 
         results.stopped = self.run_state == RunState::Stopped;
