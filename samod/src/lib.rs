@@ -68,7 +68,14 @@ impl Repo {
         builder::SamodBuilder::new(::tokio::runtime::Handle::current())
     }
 
-    // Create a new `Samod` instance which spawns its tasks onto the current gio mainloop
+    // Create a new [`Repo`] instance which spawns it's tasks onto a [`futures::executor::LocalPool`]
+    pub fn build_localpool(
+        spawner: futures::executor::LocalSpawner,
+    ) -> SamodBuilder<InMemoryStorage, futures::executor::LocalSpawner, AlwaysAnnounce> {
+        builder::SamodBuilder::new(spawner)
+    }
+
+    // Create a new [`Repo`] instance which spawns its tasks onto the current gio mainloop
     //
     // # Panics
     //
