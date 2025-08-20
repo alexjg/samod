@@ -4,6 +4,7 @@ use futures::Future;
 
 #[cfg(feature = "gio")]
 pub mod gio;
+pub mod localpool;
 #[cfg(feature = "tokio")]
 pub mod tokio;
 
