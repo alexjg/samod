@@ -7,12 +7,9 @@ pub mod gio;
 #[cfg(feature = "tokio")]
 pub mod tokio;
 
-pub trait RuntimeHandle: Clone + Send + Sync + 'static {
+pub trait RuntimeHandle: Clone + 'static {
     type JoinErr: JoinError + std::error::Error;
-    type JoinFuture<O: Send + 'static>: Future<Output = Result<O, Self::JoinErr>>
-        + Send
-        + Unpin
-        + 'static;
+    type JoinFuture<O: Send + 'static>: Future<Output = Result<O, Self::JoinErr>> + Unpin;
 
     fn spawn<O, F>(&self, f: F) -> Self::JoinFuture<O>
     where
