@@ -30,7 +30,7 @@ mod actor_handle;
 use actor_handle::ActorHandle;
 mod announce_policy;
 mod builder;
-pub use builder::SamodBuilder;
+pub use builder::RepoBuilder;
 mod conn_finished_reason;
 mod conn_handle;
 pub use conn_finished_reason::ConnFinishedReason;
@@ -57,22 +57,21 @@ impl Repo {
     // Create a new [`Repo`] instance which spawns its tasks onto the provided runtime
     pub fn builder<R: runtime::RuntimeHandle>(
         runtime: R,
-    ) -> SamodBuilder<InMemoryStorage, R, AlwaysAnnounce> {
-        builder::SamodBuilder::new(runtime)
+    ) -> RepoBuilder<InMemoryStorage, R, AlwaysAnnounce> {
+        builder::RepoBuilder::new(runtime)
     }
 
     // Create a new [`Repo`] instance which spawns it's tasks onto the current tokio runtime
     #[cfg(feature = "tokio")]
-    pub fn build_tokio() -> SamodBuilder<InMemoryStorage, ::tokio::runtime::Handle, AlwaysAnnounce>
-    {
-        builder::SamodBuilder::new(::tokio::runtime::Handle::current())
+    pub fn build_tokio() -> RepoBuilder<InMemoryStorage, ::tokio::runtime::Handle, AlwaysAnnounce> {
+        builder::RepoBuilder::new(::tokio::runtime::Handle::current())
     }
 
     // Create a new [`Repo`] instance which spawns it's tasks onto a [`futures::executor::LocalPool`]
     pub fn build_localpool(
         spawner: futures::executor::LocalSpawner,
-    ) -> SamodBuilder<InMemoryStorage, futures::executor::LocalSpawner, AlwaysAnnounce> {
-        builder::SamodBuilder::new(spawner)
+    ) -> RepoBuilder<InMemoryStorage, futures::executor::LocalSpawner, AlwaysAnnounce> {
+        builder::RepoBuilder::new(spawner)
     }
 
     // Create a new [`Repo`] instance which spawns its tasks onto the current gio mainloop
@@ -82,17 +81,17 @@ impl Repo {
     // This function will panic if called outside of a gio mainloop context.
     #[cfg(feature = "gio")]
     pub fn build_gio()
-    -> SamodBuilder<InMemoryStorage, crate::runtime::gio::GioRuntime, AlwaysAnnounce> {
-        builder::SamodBuilder::new(crate::runtime::gio::GioRuntime::new())
+    -> RepoBuilder<InMemoryStorage, crate::runtime::gio::GioRuntime, AlwaysAnnounce> {
+        builder::RepoBuilder::new(crate::runtime::gio::GioRuntime::new())
     }
 
     // Given a `SamodBuilder`, load the `Samod` instance.
     //
     // This method loads some initial state out of storage before returning a running `Samod` instance
     pub async fn load<R: runtime::RuntimeHandle, S: Storage, A: AnnouncePolicy>(
-        builder: SamodBuilder<S, R, A>,
+        builder: RepoBuilder<S, R, A>,
     ) -> Self {
-        let SamodBuilder {
+        let RepoBuilder {
             storage,
             runtime,
             peer_id,

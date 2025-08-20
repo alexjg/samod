@@ -7,16 +7,16 @@ use crate::{
     storage::{InMemoryStorage, Storage},
 };
 
-pub struct SamodBuilder<S, R, A> {
+pub struct RepoBuilder<S, R, A> {
     pub(crate) storage: S,
     pub(crate) runtime: R,
     pub(crate) announce_policy: A,
     pub(crate) peer_id: Option<PeerId>,
 }
 
-impl<S, R, A> SamodBuilder<S, R, A> {
-    pub fn with_storage<S2: Storage>(self, storage: S2) -> SamodBuilder<S2, R, A> {
-        SamodBuilder {
+impl<S, R, A> RepoBuilder<S, R, A> {
+    pub fn with_storage<S2: Storage>(self, storage: S2) -> RepoBuilder<S2, R, A> {
+        RepoBuilder {
             storage,
             peer_id: self.peer_id,
             runtime: self.runtime,
@@ -24,8 +24,8 @@ impl<S, R, A> SamodBuilder<S, R, A> {
         }
     }
 
-    pub fn with_runtime<R2: RuntimeHandle>(self, runtime: R2) -> SamodBuilder<S, R2, A> {
-        SamodBuilder {
+    pub fn with_runtime<R2: RuntimeHandle>(self, runtime: R2) -> RepoBuilder<S, R2, A> {
+        RepoBuilder {
             runtime,
             peer_id: self.peer_id,
             storage: self.storage,
@@ -41,8 +41,8 @@ impl<S, R, A> SamodBuilder<S, R, A> {
     pub fn with_announce_policy<A2: AnnouncePolicy>(
         self,
         announce_policy: A2,
-    ) -> SamodBuilder<S, R, A2> {
-        SamodBuilder {
+    ) -> RepoBuilder<S, R, A2> {
+        RepoBuilder {
             runtime: self.runtime,
             peer_id: self.peer_id,
             storage: self.storage,
@@ -51,9 +51,9 @@ impl<S, R, A> SamodBuilder<S, R, A> {
     }
 }
 
-impl<R> SamodBuilder<InMemoryStorage, R, AlwaysAnnounce> {
-    pub fn new(runtime: R) -> SamodBuilder<InMemoryStorage, R, AlwaysAnnounce> {
-        SamodBuilder {
+impl<R> RepoBuilder<InMemoryStorage, R, AlwaysAnnounce> {
+    pub fn new(runtime: R) -> RepoBuilder<InMemoryStorage, R, AlwaysAnnounce> {
+        RepoBuilder {
             storage: InMemoryStorage::new(),
             runtime,
             peer_id: None,
@@ -62,7 +62,7 @@ impl<R> SamodBuilder<InMemoryStorage, R, AlwaysAnnounce> {
     }
 }
 
-impl<S: Storage, R: RuntimeHandle, A: AnnouncePolicy> SamodBuilder<S, R, A> {
+impl<S: Storage, R: RuntimeHandle, A: AnnouncePolicy> RepoBuilder<S, R, A> {
     pub async fn load(self) -> Repo {
         Repo::load(self).await
     }
