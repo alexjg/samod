@@ -1,3 +1,4 @@
+/// Why a connection future stopped
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConnFinishedReason {
     /// This repository is shutting down

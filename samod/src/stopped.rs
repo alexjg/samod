@@ -1,3 +1,4 @@
+/// An error representing the fact that the repository has been stopped
 pub struct Stopped;
 
 impl std::fmt::Display for Stopped {

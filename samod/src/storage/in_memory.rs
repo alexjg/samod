@@ -7,6 +7,7 @@ use samod_core::StorageKey;
 
 use crate::storage::Storage;
 
+/// A [`Storage`] implementation which stores all data in memory
 #[derive(Clone)]
 pub struct InMemoryStorage(Arc<Mutex<HashMap<StorageKey, Vec<u8>>>>);
 
