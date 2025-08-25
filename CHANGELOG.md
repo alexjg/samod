@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.3.0 - 2025-08-25
+
+### Added
+
+* Added a `RuntimeHandle` for a `futures::executor::LocalPool`
+* Add `Repo::connect_tokio_io` as a convenience for connecting a
+  `tokio::io::Async{ReadWrite}` source as a length delimited stream/sink
+  combination
+* Added a bunch of docs
+
+### Breaking Changes
+
+* Rename `samod::Samod` to `samod::Repo` and `samod::SamodBuilder` to `samod::RepoBuilder`
+
 ## 0.2.2 - 2025-08-18
 
 This release is a significant rewrite of the `samod_core` crate to not use
