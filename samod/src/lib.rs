@@ -1,3 +1,4 @@
+#![cfg_attr(docsrs, feature(doc_cfg))]
 //! # Samod
 //!
 //! `samod` is a library for building collaborative applications which work offlne
@@ -295,7 +296,7 @@ pub use crate::announce_policy::{AlwaysAnnounce, AnnouncePolicy};
 use crate::storage::InMemoryStorage;
 use crate::{doc_actor_inner::DocActorInner, storage::Storage};
 pub mod runtime;
-mod websocket;
+pub mod websocket;
 
 /// The entry point to this library
 ///
@@ -335,12 +336,13 @@ impl Repo {
         builder::RepoBuilder::new(runtime)
     }
 
-    // Create a new [`RepoBuilder`] which will build a [`Repo`] that spawns it's
-    // tasks onto the current tokio runtime
-    //
-    // ## Panics
-    // If called outside of the dynamic scope of a tokio runtime
+    /// Create a new [`RepoBuilder`] which will build a [`Repo`] that spawns it's
+    /// tasks onto the current tokio runtime
+    ///
+    /// ## Panics
+    /// If called outside of the dynamic scope of a tokio runtime
     #[cfg(feature = "tokio")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "tokio")))]
     pub fn build_tokio() -> RepoBuilder<InMemoryStorage, ::tokio::runtime::Handle, AlwaysAnnounce> {
         builder::RepoBuilder::new(::tokio::runtime::Handle::current())
     }
@@ -353,13 +355,14 @@ impl Repo {
         builder::RepoBuilder::new(spawner)
     }
 
-    // Create a new [`Repo`] instance which will build a [`Repo`] that spawns
-    // its tasks onto the current gio mainloop
-    //
-    // # Panics
-    //
-    // This function will panic if called outside of a gio mainloop context.
+    /// Create a new [`Repo`] instance which will build a [`Repo`] that spawns
+    /// its tasks onto the current gio mainloop
+    ///
+    /// # Panics
+    ///
+    /// This function will panic if called outside of a gio mainloop context.
     #[cfg(feature = "gio")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "gio")))]
     pub fn build_gio()
     -> RepoBuilder<InMemoryStorage, crate::runtime::gio::GioRuntime, AlwaysAnnounce> {
         builder::RepoBuilder::new(crate::runtime::gio::GioRuntime::new())
@@ -444,15 +447,15 @@ impl Repo {
         Self { inner }
     }
 
-    // Create a new document and return a handle to it
-    //
-    // # Arguments
-    // * `initial_content` - The initial content of the document. If this is an empty document
-    //                       a single empty commit will be created and added to the document.
-    //                       This ensures that when a document is created, _something_ is in
-    //                       storage
-    //
-    // The returned future will resolve once the document has been persisted to storage
+    /// Create a new document and return a handle to it
+    ///
+    /// # Arguments
+    /// * `initial_content` - The initial content of the document. If this is an
+    ///   empty document a single empty commit will be created and added to the
+    ///   document. This ensures that when a document is created, _something_ is
+    ///   in storage
+    ///
+    /// The returned future will resolve once the document has been persisted to storage
     pub async fn create(&self, initial_content: Automerge) -> Result<DocHandle, Stopped> {
         let (tx, rx) = oneshot::channel();
         {
@@ -489,15 +492,15 @@ impl Repo {
         }
     }
 
-    // Lookup a document by ID
-    //
-    // The [`Repo`] will first attempt to load the document from [`Storage`] and
-    // if it is not found the [`Repo`] will then request the document from all
-    // connected peers (subject to the configured [`AnnouncePolicy`]). If any peer
-    // responds with the document the future will resolve once we have
-    // synchronized with at least one remote peer which has the document. Otherwise,
-    // the future will resolve to `Ok(None)` once all peers have responded that
-    // they do not have the document.
+    /// Lookup a document by ID
+    ///
+    /// The [`Repo`] will first attempt to load the document from [`Storage`] and
+    /// if it is not found the [`Repo`] will then request the document from all
+    /// connected peers (subject to the configured [`AnnouncePolicy`]). If any peer
+    /// responds with the document the future will resolve once we have
+    /// synchronized with at least one remote peer which has the document. Otherwise,
+    /// the future will resolve to `Ok(None)` once all peers have responded that
+    /// they do not have the document.
     pub fn find(
         &self,
         doc_id: DocumentId,
@@ -557,6 +560,7 @@ impl Repo {
     /// # }
     /// ```
     #[cfg(feature = "tokio")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "tokio")))]
     pub fn connect_tokio_io<Io: tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + 'static>(
         &self,
         io: Io,
@@ -672,10 +676,10 @@ impl Repo {
         }
     }
 
-    // Wait for some connection to be established with the given remote peer ID
-    //
-    // This will resolve immediately if the peer is already connected, otherwise
-    // it will resolve when a connection with the given peer ID is established.
+    /// Wait for some connection to be established with the given remote peer ID
+    ///
+    /// This will resolve immediately if the peer is already connected, otherwise
+    /// it will resolve when a connection with the given peer ID is established.
     pub async fn when_connected(&self, peer_id: PeerId) -> Result<(), Stopped> {
         let (tx, rx) = oneshot::channel();
         {
@@ -700,15 +704,15 @@ impl Repo {
         }
     }
 
-    // The peer ID of this instance
+    /// The peer ID of this instance
     pub fn peer_id(&self) -> PeerId {
         self.inner.lock().unwrap().hub.peer_id().clone()
     }
 
-    // Stop the `Samod` instance.
-    //
-    // This will wait until all storage tasks have completed before stopping all
-    // the documents and returning
+    /// Stop the `Samod` instance.
+    ///
+    /// This will wait until all storage tasks have completed before stopping all
+    /// the documents and returning
     pub fn stop(&self) -> impl Future<Output = ()> + 'static {
         let (tx, rx) = oneshot::channel();
         {

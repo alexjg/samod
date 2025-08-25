@@ -17,6 +17,7 @@ pub enum WsMessage {
 }
 
 #[cfg(feature = "tungstenite")]
+#[cfg_attr(docsrs, doc(cfg(feature = "tungstenite")))]
 impl From<WsMessage> for tungstenite::Message {
     fn from(msg: WsMessage) -> Self {
         match msg {
@@ -30,6 +31,7 @@ impl From<WsMessage> for tungstenite::Message {
 }
 
 #[cfg(feature = "tungstenite")]
+#[cfg_attr(docsrs, doc(cfg(feature = "tungstenite")))]
 impl From<tungstenite::Message> for WsMessage {
     fn from(msg: tungstenite::Message) -> Self {
         match msg {
@@ -44,6 +46,7 @@ impl From<tungstenite::Message> for WsMessage {
 }
 
 #[cfg(feature = "axum")]
+#[cfg_attr(docsrs, doc(cfg(feature = "axum")))]
 impl From<WsMessage> for axum::extract::ws::Message {
     fn from(msg: WsMessage) -> Self {
         match msg {
@@ -57,6 +60,7 @@ impl From<WsMessage> for axum::extract::ws::Message {
 }
 
 #[cfg(feature = "axum")]
+#[cfg_attr(docsrs, doc(cfg(feature = "axum")))]
 impl From<axum::extract::ws::Message> for WsMessage {
     fn from(msg: axum::extract::ws::Message) -> Self {
         match msg {
@@ -70,8 +74,9 @@ impl From<axum::extract::ws::Message> for WsMessage {
 }
 
 impl Repo {
-    /// Connect a websocket
+    /// Connect a tungstenite websocket
     #[cfg(feature = "tungstenite")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "tungstenite")))]
     pub fn connect_tungstenite<S>(
         &self,
         socket: S,
@@ -92,6 +97,7 @@ impl Repo {
 
     /// Accept a websocket in an axum handler
     #[cfg(feature = "axum")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "axum")))]
     pub fn accept_axum<S>(&self, stream: S) -> impl Future<Output = ConnFinishedReason> + 'static
     where
         S: Sink<axum::extract::ws::Message, Error = axum::Error>
@@ -107,6 +113,14 @@ impl Repo {
         self.connect_websocket(stream, ConnDirection::Incoming)
     }
 
+    /// Connect any stream of [`WsMessage`]s
+    ///
+    /// [`WsMessage`] is a copy of `tungstenite::Message` and
+    /// `axum::extract::ws::Message` which is reimplemented in this crate
+    /// because both `tungstenite` and `axum` use their own message types which
+    /// are identical, but not the same type. This function allows us to
+    /// implement the connection logic once and use it for both `tungstenite`
+    /// and `axum`.
     pub fn connect_websocket<S, M>(
         &self,
         stream: S,

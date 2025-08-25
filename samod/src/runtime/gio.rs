@@ -3,6 +3,10 @@ use std::pin::Pin;
 use crate::runtime::JoinError;
 use futures::FutureExt;
 
+/// A [`RuntimeHandle`](crate::runtime::RuntimeHandle) implementation which usese the `glib` crate to spawn tasks
+///
+/// This runtime will panic if used outside of a `glib` main loop context
+#[cfg_attr(docsrs, doc(cfg(feature = "gio")))]
 #[derive(Clone, Debug)]
 pub struct GioRuntime;
 
@@ -32,6 +36,7 @@ impl crate::runtime::RuntimeHandle for GioRuntime {
     }
 }
 
+#[cfg_attr(docsrs, doc(cfg(feature = "gio")))]
 pub struct GlibJoinError(glib::JoinError);
 
 impl std::fmt::Display for GlibJoinError {
@@ -58,6 +63,7 @@ impl JoinError for GlibJoinError {
     }
 }
 
+#[cfg_attr(docsrs, doc(cfg(feature = "gio")))]
 pub struct GlibJoinHandle<O>(glib::JoinHandle<O>);
 
 impl<O: 'static> Future for GlibJoinHandle<O> {
