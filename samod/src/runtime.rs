@@ -8,7 +8,7 @@ use futures::Future;
 pub mod gio;
 pub mod localpool;
 #[cfg(feature = "tokio")]
-pub mod tokio;
+mod tokio;
 
 /// An abstraction over the asynchronous runtime the repo is running on
 ///

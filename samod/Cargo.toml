@@ -55,3 +55,9 @@ tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
 [[test]]
 name = "js_interop"
 required-features = ["tokio", "tungstenite", "axum"]
+
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+rustc-args = ["--cfg", "docsrs"]
