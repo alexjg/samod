@@ -260,6 +260,7 @@ use futures::{
     stream::FuturesUnordered,
 };
 use rand::SeedableRng;
+pub use samod_core::{AutomergeUrl, DocumentId, PeerId, network::ConnDirection};
 use samod_core::{
     CommandId, CommandResult, ConnectionId, DocumentActorId, LoaderState, UnixTimestamp,
     actors::{
@@ -270,7 +271,6 @@ use samod_core::{
     io::{IoResult, IoTask},
     network::{ConnectionEvent, ConnectionState},
 };
-pub use samod_core::{DocumentId, PeerId, network::ConnDirection};
 use tracing::Instrument;
 
 mod actor_task;
