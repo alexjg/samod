@@ -1,4 +1,4 @@
-#![cfg_attr(docsrs, feature(doc_cfg))]
+#![cfg_attr(docsrs, feature(doc_auto_cfg))]
 //! # Samod
 //!
 //! `samod` is a library for building collaborative applications which work offlne
@@ -342,7 +342,6 @@ impl Repo {
     /// ## Panics
     /// If called outside of the dynamic scope of a tokio runtime
     #[cfg(feature = "tokio")]
-    #[cfg_attr(docsrs, doc(cfg(feature = "tokio")))]
     pub fn build_tokio() -> RepoBuilder<InMemoryStorage, ::tokio::runtime::Handle, AlwaysAnnounce> {
         builder::RepoBuilder::new(::tokio::runtime::Handle::current())
     }
@@ -362,7 +361,6 @@ impl Repo {
     ///
     /// This function will panic if called outside of a gio mainloop context.
     #[cfg(feature = "gio")]
-    #[cfg_attr(docsrs, doc(cfg(feature = "gio")))]
     pub fn build_gio()
     -> RepoBuilder<InMemoryStorage, crate::runtime::gio::GioRuntime, AlwaysAnnounce> {
         builder::RepoBuilder::new(crate::runtime::gio::GioRuntime::new())
@@ -560,7 +558,6 @@ impl Repo {
     /// # }
     /// ```
     #[cfg(feature = "tokio")]
-    #[cfg_attr(docsrs, doc(cfg(feature = "tokio")))]
     pub fn connect_tokio_io<Io: tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + 'static>(
         &self,
         io: Io,

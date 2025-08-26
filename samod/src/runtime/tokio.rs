@@ -4,7 +4,6 @@ use crate::runtime::{JoinError, RuntimeHandle};
 
 use tokio::task::JoinError as TokioJoinError;
 
-#[cfg_attr(docsrs, doc(cfg(feature = "tokio")))]
 impl RuntimeHandle for tokio::runtime::Handle {
     type JoinErr = tokio::task::JoinError;
     type JoinFuture<O: Send + 'static> = tokio::task::JoinHandle<O>;

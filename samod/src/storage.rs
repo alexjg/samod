@@ -9,7 +9,6 @@ mod in_memory;
 pub use in_memory::InMemoryStorage;
 
 #[cfg(feature = "tokio")]
-#[cfg_attr(docsrs, doc(cfg(feature = "tokio")))]
 pub use filesystem::tokio::FilesystemStorage as TokioFilesystemStorage;
 
 #[cfg(feature = "gio")]
