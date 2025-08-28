@@ -1,6 +1,4 @@
-//! An abstraction over async runtimes
-
-use std::any::Any;
+use std::pin::Pin;
 
 use futures::Future;
 
@@ -17,18 +15,7 @@ mod tokio;
 /// [`Storage`](crate::Storage) or pass messages between different document
 /// threads and the central control loop of the repo. [`RuntimeHandle`]
 /// represents this ability to spawn tasks.
-pub trait RuntimeHandle: Clone + 'static {
-    type JoinErr: JoinError + std::error::Error;
-    type JoinFuture<O: Send + 'static>: Future<Output = Result<O, Self::JoinErr>> + Unpin;
-
+pub trait RuntimeHandle: 'static {
     /// Spawn a task to be run in the background
-    fn spawn<O, F>(&self, f: F) -> Self::JoinFuture<O>
-    where
-        O: Send + 'static,
-        F: Future<Output = O> + Send + 'static;
-}
-
-pub trait JoinError {
-    fn is_panic(&self) -> bool;
-    fn into_panic(self) -> Box<dyn Any + Send + 'static>;
+    fn spawn(&self, f: Pin<Box<dyn Future<Output = ()> + Send + 'static>>);
 }
