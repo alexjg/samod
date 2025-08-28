@@ -75,6 +75,8 @@ async fn basic_sync() {
 
     let bob_handle = bob.find(alice_handle.document_id().clone()).await.unwrap();
     assert!(bob_handle.is_some());
+    bob.stop().await;
+    alice.stop().await;
 }
 
 #[tokio::test]
@@ -120,6 +122,8 @@ async fn non_announcing_peers_dont_sync() {
     // Bob should not find the document because alice did not announce it
     let bob_handle = bob.find(alice_handle.document_id().clone()).await.unwrap();
     assert!(bob_handle.is_none());
+    bob.stop().await;
+    alice.stop().await;
 }
 
 #[cfg(feature = "tokio")]
@@ -170,6 +174,8 @@ async fn ephemera_smoke() {
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     assert_eq!(*bob_received.lock().unwrap(), vec![vec![1, 2, 3]]);
+    bob.stop().await;
+    alice.stop().await;
 }
 
 #[cfg(feature = "tokio")]
@@ -230,4 +236,6 @@ async fn change_listeners_smoke() {
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     assert_eq!(*bob_received.lock().unwrap(), vec![new_heads]);
+    bob.stop().await;
+    alice.stop().await;
 }

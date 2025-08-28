@@ -16,8 +16,8 @@ use crate::{
 pub(crate) struct DocActorInner {
     document_id: DocumentId,
     actor_id: DocumentActorId,
-    tx_to_core: mpsc::UnboundedSender<(DocumentActorId, DocToHubMsg)>,
-    tx_io: mpsc::UnboundedSender<io_loop::IoLoopTask>,
+    tx_to_core: async_channel::Sender<(DocumentActorId, DocToHubMsg)>,
+    tx_io: async_channel::Sender<io_loop::IoLoopTask>,
     ephemera_listeners: Vec<mpsc::UnboundedSender<Vec<u8>>>,
     change_listeners: Vec<mpsc::UnboundedSender<DocumentChanged>>,
     actor: DocumentActor,
@@ -28,8 +28,8 @@ impl DocActorInner {
         document_id: DocumentId,
         actor_id: DocumentActorId,
         actor: DocumentActor,
-        tx_to_core: mpsc::UnboundedSender<(DocumentActorId, DocToHubMsg)>,
-        tx_io: mpsc::UnboundedSender<io_loop::IoLoopTask>,
+        tx_to_core: async_channel::Sender<(DocumentActorId, DocToHubMsg)>,
+        tx_io: async_channel::Sender<io_loop::IoLoopTask>,
     ) -> Self {
         DocActorInner {
             document_id,
@@ -82,18 +82,21 @@ impl DocActorInner {
             stopped: _,
         } = results;
         for task in io_tasks {
-            let _ = self
-                .tx_io
-                // .unbounded_send((task.id, Some(self.actor_id), storage_task));
-                .unbounded_send(IoLoopTask {
-                    doc_id: self.document_id.clone(),
-                    task,
-                    actor_id: self.actor_id,
-                });
+            if let Err(_e) = self.tx_io.send_blocking(IoLoopTask {
+                doc_id: self.document_id.clone(),
+                task,
+                actor_id: self.actor_id,
+            }) {
+                tracing::error!("io receiver dropped whilst document actor is still running");
+                return;
+            }
         }
 
         for msg in outgoing_messages {
-            let _ = self.tx_to_core.unbounded_send((self.actor_id, msg));
+            if let Err(_e) = self.tx_to_core.send_blocking((self.actor_id, msg)) {
+                tracing::error!("core receiver dropped whilst document actor is still running");
+                return;
+            }
         }
 
         if !ephemeral_messages.is_empty() {
