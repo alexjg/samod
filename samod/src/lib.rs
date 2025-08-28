@@ -249,7 +249,7 @@
 //!
 use std::{
     collections::HashMap,
-    sync::{Arc, Mutex, mpsc as std_mpsc},
+    sync::{Arc, Mutex},
 };
 
 use automerge::Automerge;
@@ -403,10 +403,15 @@ impl Repo {
             });
         };
 
-        let (tx_storage, rx_storage) = mpsc::unbounded();
-        let (tx_to_core, rx_from_core) = mpsc::unbounded();
+        let (tx_storage, rx_storage) = async_channel::unbounded();
+        let (tx_to_core, rx_from_core) = async_channel::unbounded();
         let inner = Arc::new(Mutex::new(Inner {
-            workers: rayon::ThreadPoolBuilder::new().build().unwrap(),
+            workers: rayon::ThreadPoolBuilder::new()
+                .panic_handler(|err| {
+                    tracing::error!(err=?err, "panic in document worker");
+                })
+                .build()
+                .unwrap(),
             actors: HashMap::new(),
             hub: *hub,
             pending_commands: HashMap::new(),
@@ -433,8 +438,8 @@ impl Repo {
             .spawn({
                 let inner = inner.clone();
                 async move {
-                    let mut rx = rx_from_core;
-                    while let Some((actor_id, msg)) = rx.next().await {
+                    let rx = rx_from_core;
+                    while let Ok((actor_id, msg)) = rx.recv().await {
                         let event = HubEvent::actor_message(actor_id, msg);
                         inner.lock().unwrap().handle_event(event);
                     }
@@ -731,8 +736,8 @@ struct Inner {
     hub: Hub,
     pending_commands: HashMap<CommandId, oneshot::Sender<CommandResult>>,
     connections: HashMap<ConnectionId, ConnHandle>,
-    tx_io: mpsc::UnboundedSender<io_loop::IoLoopTask>,
-    tx_to_core: mpsc::UnboundedSender<(DocumentActorId, DocToHubMsg)>,
+    tx_io: async_channel::Sender<io_loop::IoLoopTask>,
+    tx_to_core: async_channel::Sender<(DocumentActorId, DocToHubMsg)>,
     waiting_for_connection: HashMap<PeerId, Vec<oneshot::Sender<()>>>,
     stop_waiters: Vec<oneshot::Sender<()>>,
     rng: rand::rngs::StdRng,
@@ -797,7 +802,7 @@ impl Inner {
 
         for (actor_id, actor_msg) in actor_messages {
             if let Some(ActorHandle { tx, .. }) = self.actors.get(&actor_id) {
-                let _ = tx.send(ActorTask::HandleMessage(actor_msg));
+                let _ = tx.send_blocking(ActorTask::HandleMessage(actor_msg));
             } else {
                 tracing::warn!(?actor_id, "received message for unknown actor");
             }
@@ -841,7 +846,7 @@ impl Inner {
 
     #[tracing::instrument(skip(self, args))]
     fn spawn_actor(&mut self, args: SpawnArgs) {
-        let (tx, rx) = std_mpsc::channel();
+        let (tx, rx) = async_channel::unbounded();
         let actor_id = args.actor_id();
         let doc_id = args.document_id().clone();
         let (actor, init_results) = DocumentActor::new(UnixTimestamp::now(), args);
@@ -868,7 +873,7 @@ impl Inner {
             let _enter = span.enter();
             doc_inner.lock().unwrap().handle_results(init_results);
 
-            while let Ok(actor_task) = rx.recv() {
+            while let Ok(actor_task) = rx.recv_blocking() {
                 let mut inner = doc_inner.lock().unwrap();
                 inner.handle_task(actor_task);
                 if inner.is_stopped() {
