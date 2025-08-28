@@ -2,7 +2,7 @@ use std::fmt;
 
 use automerge::ChangeHash;
 
-use crate::DocumentId;
+use crate::{CompactionHash, DocumentId};
 
 /// A hierarchical key for storage operations in the samod-core system.
 ///
@@ -46,11 +46,11 @@ impl StorageKey {
         ])
     }
 
-    pub fn snapshot_path(doc_id: DocumentId, compaction_hash: String) -> StorageKey {
+    pub fn snapshot_path(doc_id: &DocumentId, compaction_hash: &CompactionHash) -> StorageKey {
         StorageKey(vec![
             doc_id.to_string(),
             "snapshot".to_string(),
-            compaction_hash,
+            compaction_hash.to_string(),
         ])
     }
 

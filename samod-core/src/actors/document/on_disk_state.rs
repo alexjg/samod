@@ -9,7 +9,7 @@ use crate::{
 };
 
 mod compaction_hash;
-use compaction_hash::CompactionHash;
+pub use compaction_hash::CompactionHash;
 
 #[derive(Debug)]
 pub(super) struct OnDiskState {
@@ -59,12 +59,18 @@ impl OnDiskState {
                 num_on_disk = self.on_disk.len(),
                 "compacting changes"
             );
-            let hash = CompactionHash::from(doc.get_heads());
-            let key = StorageKey::snapshot_path(doc_id.clone(), hash.to_string());
+            let hash = CompactionHash::new(&doc.get_heads());
+            let key = StorageKey::snapshot_path(doc_id, &hash);
             let put_id = out.put(key.clone(), doc.save());
+            let mut supercedes = self.on_disk.clone();
+            // Make sure that we don't delete the compaction we're producing
+            // somehow One way this can happen is if a previous process got
+            // killed after writing the compacted chunk but before deleting the
+            // incremental changes.
+            supercedes.remove(&key);
             self.compaction = Some(Compaction {
                 task: put_id,
-                supercedes: self.on_disk.clone(),
+                supercedes,
             });
             self.running_puts.insert(put_id, key);
         } else {
