@@ -30,11 +30,13 @@ fn test_localpool() {
             .spawn_local(async move {
                 let alice = samod::Repo::build_localpool(spawner.clone())
                     .with_peer_id("alice".into())
+                    .with_threadpool(None)
                     .load()
                     .await;
 
                 let bob = samod::Repo::build_localpool(spawner.clone())
                     .with_peer_id("bob".into())
+                    .with_threadpool(None)
                     .load()
                     .await;
 

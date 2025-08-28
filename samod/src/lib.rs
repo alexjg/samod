@@ -285,6 +285,7 @@ mod conn_handle;
 pub use conn_finished_reason::ConnFinishedReason;
 mod doc_actor_inner;
 mod doc_handle;
+mod doc_runner;
 mod io_loop;
 pub use doc_handle::DocHandle;
 mod peer_connection_info;
@@ -294,7 +295,11 @@ pub use stopped::Stopped;
 pub mod storage;
 pub use crate::announce_policy::{AlwaysAnnounce, AnnouncePolicy};
 use crate::storage::InMemoryStorage;
-use crate::{doc_actor_inner::DocActorInner, storage::Storage};
+use crate::{
+    doc_actor_inner::DocActorInner,
+    doc_runner::{DocRunner, SpawnedActor},
+    storage::Storage,
+};
 pub mod runtime;
 pub mod websocket;
 
@@ -374,6 +379,7 @@ impl Repo {
             runtime,
             peer_id,
             announce_policy,
+            threadpool,
         } = builder;
         let mut rng = rand::rngs::StdRng::from_rng(&mut rand::rng());
         let peer_id = peer_id.unwrap_or_else(|| PeerId::new_with_rng(&mut rng));
@@ -405,13 +411,15 @@ impl Repo {
 
         let (tx_storage, rx_storage) = async_channel::unbounded();
         let (tx_to_core, rx_from_core) = async_channel::unbounded();
+        let doc_runner = if let Some(threadpool) = threadpool {
+            DocRunner::Threadpool(threadpool)
+        } else {
+            let (tx, rx) = async_channel::unbounded();
+            runtime.spawn(async_actor_runner(rx).boxed());
+            DocRunner::Async { tx }
+        };
         let inner = Arc::new(Mutex::new(Inner {
-            workers: rayon::ThreadPoolBuilder::new()
-                .panic_handler(|err| {
-                    tracing::error!(err=?err, "panic in document worker");
-                })
-                .build()
-                .unwrap(),
+            doc_runner,
             actors: HashMap::new(),
             hub: *hub,
             pending_commands: HashMap::new(),
@@ -730,7 +738,7 @@ impl Repo {
 }
 
 struct Inner {
-    workers: rayon::ThreadPool,
+    doc_runner: DocRunner,
     actors: HashMap<DocumentActorId, ActorHandle>,
     hub: Hub,
     pending_commands: HashMap<CommandId, oneshot::Sender<CommandResult>>,
@@ -868,19 +876,85 @@ impl Inner {
         );
 
         let span = tracing::Span::current();
-        self.workers.spawn(move || {
-            let _enter = span.enter();
-            doc_inner.lock().unwrap().handle_results(init_results);
+        match &mut self.doc_runner {
+            DocRunner::Threadpool(threadpool) => {
+                threadpool.spawn(move || {
+                    let _enter = span.enter();
+                    doc_inner.lock().unwrap().handle_results(init_results);
 
-            while let Ok(actor_task) = rx.recv_blocking() {
-                let mut inner = doc_inner.lock().unwrap();
-                inner.handle_task(actor_task);
-                if inner.is_stopped() {
-                    tracing::debug!(?doc_id, ?actor_id, "actor stopped");
-                    break;
+                    while let Ok(actor_task) = rx.recv_blocking() {
+                        let mut inner = doc_inner.lock().unwrap();
+                        inner.handle_task(actor_task);
+                        if inner.is_stopped() {
+                            tracing::debug!(?doc_id, ?actor_id, "actor stopped");
+                            break;
+                        }
+                    }
+                });
+            }
+            DocRunner::Async { tx } => {
+                if tx
+                    .send_blocking(SpawnedActor {
+                        doc_id,
+                        actor_id,
+                        inner: doc_inner,
+                        rx_tasks: rx,
+                        init_results,
+                    })
+                    .is_err()
+                {
+                    tracing::error!(?actor_id, "actor spawner is gone");
                 }
             }
-        });
+        }
+    }
+}
+
+/// Spawns a task which listens for new actors to spawn and runs them
+///
+/// `samod` has two ways of running document actors, on a rayon threadpool, or
+/// on the async runtime which was provided to the `SamodBuilder`. In the latter
+/// case we don't actually hold on to a reference to the `RuntimeHandle` because
+/// that requires it to be `Send` which is not always the case (e.g. when using
+/// futures::executor::LocalPool). Instead, we spawn a task on the runtime which
+/// listens on a channel for new actors to spawn and then runs them on a
+/// `FuturesUnordered`. This function is that task.
+async fn async_actor_runner(rx: async_channel::Receiver<SpawnedActor>) {
+    let mut running_actors = FuturesUnordered::new();
+
+    loop {
+        futures::select! {
+            spawn_actor = rx.recv().fuse() => {
+                match spawn_actor {
+                    Err(_e) => {
+                        tracing::trace!("actor spawner task finished");
+                        break;
+                    }
+                    Ok(SpawnedActor { inner, rx_tasks, init_results, doc_id, actor_id }) => {
+                        running_actors.push(async move {
+                            inner.lock().unwrap().handle_results(init_results);
+
+                            while let Ok(actor_task) = rx_tasks.recv().await {
+                                let mut inner = inner.lock().unwrap();
+                                inner.handle_task(actor_task);
+                                if inner.is_stopped() {
+                                    tracing::debug!(?doc_id, ?actor_id, "actor stopped");
+                                    break;
+                                }
+                            }
+                        });
+                    }
+                }
+            },
+            _ = running_actors.next() => {
+                // nothing to do
+            }
+        }
+    }
+
+    // Wait for all actors to stop
+    while running_actors.next().await.is_some() {
+        // nothing to do
     }
 }
 
