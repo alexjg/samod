@@ -255,7 +255,7 @@ use std::{
 use automerge::Automerge;
 use conn_handle::ConnHandle;
 use futures::{
-    Sink, SinkExt, Stream, StreamExt,
+    FutureExt, Sink, SinkExt, Stream, StreamExt,
     channel::{mpsc, oneshot},
     stream::FuturesUnordered,
 };
@@ -423,29 +423,28 @@ impl Repo {
             rng: rand::rngs::StdRng::from_os_rng(),
         }));
 
-        // These futures are spawned on the runtime so they run regardless of awaiting
-        #[allow(clippy::let_underscore_future)]
-        let _ = runtime.spawn(io_loop::io_loop(
-            peer_id.clone(),
-            inner.clone(),
-            storage,
-            announce_policy,
-            rx_storage,
-        ));
-        // These futures are spawned on the runtime so they run regardless of awaiting
-        #[allow(clippy::let_underscore_future)]
-        let _ = runtime
-            .spawn({
-                let inner = inner.clone();
-                async move {
-                    let rx = rx_from_core;
-                    while let Ok((actor_id, msg)) = rx.recv().await {
-                        let event = HubEvent::actor_message(actor_id, msg);
-                        inner.lock().unwrap().handle_event(event);
-                    }
+        runtime.spawn(
+            io_loop::io_loop(
+                peer_id.clone(),
+                inner.clone(),
+                storage,
+                announce_policy,
+                rx_storage,
+            )
+            .boxed(),
+        );
+        runtime.spawn({
+            let inner = inner.clone();
+            async move {
+                let rx = rx_from_core;
+                while let Ok((actor_id, msg)) = rx.recv().await {
+                    let event = HubEvent::actor_message(actor_id, msg);
+                    inner.lock().unwrap().handle_event(event);
                 }
-            })
-            .instrument(tracing::info_span!("actor_loop", local_peer_id=%peer_id));
+            }
+            .instrument(tracing::info_span!("actor_loop", local_peer_id=%peer_id))
+            .boxed()
+        });
 
         Self { inner }
     }
