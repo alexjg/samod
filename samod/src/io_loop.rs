@@ -1,6 +1,6 @@
 use std::sync::{Arc, Mutex};
 
-use futures::{StreamExt, channel::mpsc, stream::FuturesUnordered};
+use futures::{FutureExt, StreamExt, stream::FuturesUnordered};
 use samod_core::{
     DocumentActorId, DocumentId, PeerId,
     actors::document::io::{DocumentIoResult, DocumentIoTask},
@@ -28,14 +28,14 @@ pub(crate) async fn io_loop<S: Storage, A: AnnouncePolicy>(
     inner: Arc<Mutex<Inner>>,
     storage: S,
     announce_policy: A,
-    mut rx: mpsc::UnboundedReceiver<IoLoopTask>,
+    rx: async_channel::Receiver<IoLoopTask>,
 ) {
     let mut running_tasks = FuturesUnordered::new();
 
     loop {
         futures::select! {
-            next_task = rx.next() => {
-                let Some(next_task) = next_task else {
+            next_task = rx.recv().fuse() => {
+                let Some(next_task) = next_task.ok() else {
                     tracing::trace!("storage loop channel closed, exiting");
                     break;
                 };
@@ -59,7 +59,7 @@ pub(crate) async fn io_loop<S: Storage, A: AnnouncePolicy>(
                     tracing::warn!(?actor_id, "received io result for unknown actor");
                     continue;
                 };
-                let _ = tx.send(ActorTask::IoComplete(result));
+                let _ = tx.send_blocking(ActorTask::IoComplete(result));
             }
         }
     }
@@ -70,7 +70,7 @@ pub(crate) async fn io_loop<S: Storage, A: AnnouncePolicy>(
             tracing::warn!(?actor_id, "received io result for unknown actor");
             continue;
         };
-        let _ = tx.send(ActorTask::IoComplete(result));
+        let _ = tx.send_blocking(ActorTask::IoComplete(result));
     }
 }
 
