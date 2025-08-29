@@ -13,6 +13,7 @@ pub struct RepoBuilder<S, R, A> {
     pub(crate) runtime: R,
     pub(crate) announce_policy: A,
     pub(crate) peer_id: Option<PeerId>,
+    pub(crate) threadpool: Option<rayon::ThreadPool>,
 }
 
 impl<S, R, A> RepoBuilder<S, R, A> {
@@ -22,6 +23,7 @@ impl<S, R, A> RepoBuilder<S, R, A> {
             peer_id: self.peer_id,
             runtime: self.runtime,
             announce_policy: self.announce_policy,
+            threadpool: self.threadpool,
         }
     }
 
@@ -31,6 +33,7 @@ impl<S, R, A> RepoBuilder<S, R, A> {
             peer_id: self.peer_id,
             storage: self.storage,
             announce_policy: self.announce_policy,
+            threadpool: self.threadpool,
         }
     }
 
@@ -48,7 +51,13 @@ impl<S, R, A> RepoBuilder<S, R, A> {
             peer_id: self.peer_id,
             storage: self.storage,
             announce_policy,
+            threadpool: self.threadpool,
         }
+    }
+
+    pub fn with_threadpool(mut self, threadpool: Option<rayon::ThreadPool>) -> Self {
+        self.threadpool = threadpool;
+        self
     }
 }
 
@@ -59,6 +68,7 @@ impl<R> RepoBuilder<InMemoryStorage, R, AlwaysAnnounce> {
             runtime,
             peer_id: None,
             announce_policy: AlwaysAnnounce,
+            threadpool: None,
         }
     }
 }
