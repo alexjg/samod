@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.1 - 2025-08-29
+
+### Fixed
+
+* It was possible for the compaction logic to completely delete a document in
+  some cases, fixed in https://github.com/alexjg/samod/pull/19
+
 ## 0.3.0 - 2025-08-25
 
 ### Added
