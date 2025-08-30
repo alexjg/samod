@@ -21,7 +21,7 @@ mod gio_tests {
             let temp_dir = TempDir::new().unwrap();
             let storage = GioFilesystemStorage::new(temp_dir.path());
 
-            let key = StorageKey::from(vec!["test"]);
+            let key = StorageKey::from_parts(vec!["test"]).unwrap();
             let data = b"hello world".to_vec();
 
             // Test put and load
@@ -45,12 +45,12 @@ mod gio_tests {
             let temp_dir = TempDir::new().unwrap();
             let storage = GioFilesystemStorage::new(temp_dir.path());
 
-            let base_key = StorageKey::from(vec!["test_prefix"]);
+            let base_key = StorageKey::from_parts(vec!["test_prefix"]).unwrap();
 
             // Put multiple files with the same prefix
-            let key1 = StorageKey::from(vec!["test_prefix", "file1"]);
-            let key2 = StorageKey::from(vec!["test_prefix", "file2"]);
-            let key3 = StorageKey::from(vec!["test_prefix", "subdir", "file3"]);
+            let key1 = StorageKey::from_parts(vec!["test_prefix", "file1"]).unwrap();
+            let key2 = StorageKey::from_parts(vec!["test_prefix", "file2"]).unwrap();
+            let key3 = StorageKey::from_parts(vec!["test_prefix", "subdir", "file3"]).unwrap();
 
             let data1 = b"data1".to_vec();
             let data2 = b"data2".to_vec();
@@ -81,7 +81,7 @@ mod gio_tests {
             let temp_dir = TempDir::new().unwrap();
             let storage = GioFilesystemStorage::new(temp_dir.path());
 
-            let key = StorageKey::from(vec!["nonexistent"]);
+            let key = StorageKey::from_parts(vec!["nonexistent"]).unwrap();
             let loaded = storage.load(key).await;
             assert_eq!(loaded, None);
         });
@@ -96,7 +96,7 @@ mod gio_tests {
             let temp_dir = TempDir::new().unwrap();
             let storage = GioFilesystemStorage::new(temp_dir.path());
 
-            let prefix = StorageKey::from(vec!["empty_prefix"]);
+            let prefix = StorageKey::from_parts(vec!["empty_prefix"]).unwrap();
             let loaded_range = storage.load_range(prefix).await;
             assert!(loaded_range.is_empty());
         });
@@ -112,7 +112,8 @@ mod gio_tests {
             let storage = GioFilesystemStorage::new(temp_dir.path());
 
             // Create a deeply nested key
-            let key = StorageKey::from(vec!["level1", "level2", "level3", "file.txt"]);
+            let key =
+                StorageKey::from_parts(vec!["level1", "level2", "level3", "file.txt"]).unwrap();
 
             let data = b"nested data".to_vec();
 
@@ -135,7 +136,7 @@ mod gio_tests {
             let storage = GioFilesystemStorage::new(temp_dir.path());
 
             // Test that keys are properly splayed (first component split by first two chars)
-            let key = StorageKey::from(vec!["abcdef", "file.txt"]);
+            let key = StorageKey::from_parts(vec!["abcdef", "file.txt"]).unwrap();
 
             let data = b"splayed data".to_vec();
             storage.put(key.clone(), data.clone()).await;
