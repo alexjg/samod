@@ -22,9 +22,9 @@ use crate::{CompactionHash, DocumentId};
 /// use samod_core::StorageKey;
 ///
 /// // Create keys from string vectors
-/// let key1 = StorageKey::from(vec!["users", "123", "profile"]);
-/// let key2 = StorageKey::from(vec!["users", "123", "settings"]);
-/// let prefix = StorageKey::from(vec!["users", "123"]);
+/// let key1 = StorageKey::from_parts(vec!["users", "123", "profile"]).unwrap();
+/// let key2 = StorageKey::from_parts(vec!["users", "123", "settings"]).unwrap();
+/// let prefix = StorageKey::from_parts(vec!["users", "123"]).unwrap();
 ///
 /// // Check prefix relationships
 /// assert!(prefix.is_prefix_of(&key1));
@@ -38,12 +38,20 @@ impl StorageKey {
         StorageKey(vec!["storage-adapter-id".to_string()])
     }
 
+    pub fn incremental_prefix(doc_id: &DocumentId) -> StorageKey {
+        StorageKey(vec![doc_id.to_string(), "incremental".to_string()])
+    }
+
     pub fn incremental_path(doc_id: &DocumentId, change_hash: ChangeHash) -> StorageKey {
         StorageKey(vec![
             doc_id.to_string(),
             "incremental".to_string(),
             change_hash.to_string(),
         ])
+    }
+
+    pub fn snapshot_prefix(doc_id: &DocumentId) -> StorageKey {
+        StorageKey(vec![doc_id.to_string(), "snapshot".to_string()])
     }
 
     pub fn snapshot_path(doc_id: &DocumentId, compaction_hash: &CompactionHash) -> StorageKey {
@@ -65,10 +73,23 @@ impl StorageKey {
     /// ```rust
     /// use samod_core::StorageKey;
     ///
-    /// let key = StorageKey::from_parts(&["users", "123", "profile"]);
+    /// let key = StorageKey::from_parts(&["users", "123", "profile"]).unwrap();
     /// ```
-    pub fn from_parts(parts: &[&str]) -> Self {
-        StorageKey(parts.iter().map(|s| s.to_string()).collect())
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any part is empty or contains a slash.
+    pub fn from_parts<I: IntoIterator<Item = S>, S: AsRef<str>>(
+        parts: I,
+    ) -> Result<Self, InvalidStorageKey> {
+        let mut components = Vec::new();
+        for part in parts {
+            if part.as_ref().is_empty() || part.as_ref().contains("/") {
+                return Err(InvalidStorageKey);
+            }
+            components.push(part.as_ref().to_string());
+        }
+        Ok(StorageKey(components))
     }
 
     /// Checks if this key is a prefix of another key.
@@ -89,14 +110,14 @@ impl StorageKey {
     ///
     /// ```rust
     /// # use samod_core::StorageKey;
-    /// let key = StorageKey::from(vec!["a", "b", "c"]);
-    /// let prefix = StorageKey::from(vec!["a", "b"]);
-    /// assert_eq!(key.onelevel_deeper(&prefix), Some(StorageKey::from(vec!["a", "b", "c"])));
+    /// let key = StorageKey::from_parts(vec!["a", "b", "c"]).unwrap();
+    /// let prefix = StorageKey::from_parts(vec!["a", "b"]).unwrap();
+    /// assert_eq!(key.onelevel_deeper(&prefix), Some(StorageKey::from_parts(vec!["a", "b", "c"]).unwrap()));
     ///
-    /// let prefix2 = StorageKey::from(vec!["a"]);
-    /// assert_eq!(key.onelevel_deeper(&prefix2), Some(StorageKey::from(vec!["a", "b"])));
+    /// let prefix2 = StorageKey::from_parts(vec!["a"]).unwrap();
+    /// assert_eq!(key.onelevel_deeper(&prefix2), Some(StorageKey::from_parts(vec!["a", "b"]).unwrap()));
     ///
-    /// let prefix3 = StorageKey::from(vec!["a", "b", "c", "d"]);
+    /// let prefix3 = StorageKey::from_parts(vec!["a", "b", "c", "d"]).unwrap();
     /// assert_eq!(key.onelevel_deeper(&prefix3), None);
     /// ```
     pub fn onelevel_deeper(&self, prefix: &StorageKey) -> Option<StorageKey> {
@@ -114,10 +135,19 @@ impl StorageKey {
         StorageKey(new_key)
     }
 
-    pub fn with_component(&self, component: String) -> StorageKey {
-        let mut new_key = self.0.clone();
-        new_key.push(component);
-        StorageKey(new_key)
+    /// Create a new StorageKey with the given component appended.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the new component is empty or contains a forward slash.
+    pub fn with_component(&self, component: String) -> Result<StorageKey, InvalidStorageKey> {
+        if component.is_empty() || component.contains('/') {
+            Err(InvalidStorageKey)
+        } else {
+            let mut new_key = self.0.clone();
+            new_key.push(component);
+            Ok(StorageKey(new_key))
+        }
     }
 }
 
@@ -139,32 +169,19 @@ impl<'a> IntoIterator for &'a StorageKey {
     }
 }
 
-impl FromIterator<String> for StorageKey {
-    fn from_iter<T: IntoIterator<Item = String>>(iter: T) -> Self {
-        StorageKey(iter.into_iter().collect())
-    }
-}
-
-impl<'a> FromIterator<&'a str> for StorageKey {
-    fn from_iter<T: IntoIterator<Item = &'a str>>(iter: T) -> Self {
-        StorageKey(iter.into_iter().map(String::from).collect())
-    }
-}
-
-impl<'a> From<Vec<&'a str>> for StorageKey {
-    fn from(vec: Vec<&'a str>) -> Self {
-        StorageKey(vec.into_iter().map(String::from).collect())
-    }
-}
-
-impl From<Vec<String>> for StorageKey {
-    fn from(vec: Vec<String>) -> Self {
-        StorageKey(vec)
-    }
-}
-
 impl fmt::Display for StorageKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.0.join("/"))
     }
 }
+
+#[derive(Debug)]
+pub struct InvalidStorageKey;
+
+impl std::fmt::Display for InvalidStorageKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "InvalidStorageKey")
+    }
+}
+
+impl std::error::Error for InvalidStorageKey {}

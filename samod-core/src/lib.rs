@@ -15,7 +15,7 @@ pub use document_id::{BadDocumentId, DocumentId};
 pub mod io;
 pub use peer_id::{PeerId, PeerIdError};
 mod storage_key;
-pub use storage_key::StorageKey;
+pub use storage_key::{InvalidStorageKey, StorageKey};
 mod storage_id;
 pub use storage_id::{StorageId, StorageIdError};
 mod unix_timestamp;

@@ -91,7 +91,9 @@ pub mod tokio {
                         let Some(entry_meta) = tokio::fs::metadata(&entry_path).await.ok() else {
                             continue;
                         };
-                        let next_key_prefix = key_prefix.with_component(filename);
+                        let Ok(next_key_prefix) = key_prefix.with_component(filename) else {
+                            continue;
+                        };
                         if entry_meta.is_dir() {
                             to_visit.push((entry_path, next_key_prefix));
                         } else if entry_path.is_file() {
@@ -243,8 +245,11 @@ pub mod gio {
                             };
 
                             let child = current_dir.child(&filename);
-                            let next_key_prefix =
-                                key_prefix.with_component(filename_str.to_string());
+                            let Ok(next_key_prefix) =
+                                key_prefix.with_component(filename_str.to_string())
+                            else {
+                                continue;
+                            };
 
                             match file_info.file_type() {
                                 gio::FileType::Directory => {

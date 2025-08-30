@@ -68,16 +68,12 @@ impl Load {
         match &self.state {
             LoadState::Idle => Vec::new(),
             LoadState::Initial => {
-                let snapshot_prefix =
-                    StorageKey::from(vec![self.doc_id.to_string(), "snapshot".to_string()]);
                 let snapshot_task = IoTask::new(StorageTask::LoadRange {
-                    prefix: snapshot_prefix,
+                    prefix: StorageKey::snapshot_prefix(&self.doc_id),
                 });
 
-                let incremental_prefix =
-                    StorageKey::from(vec![self.doc_id.to_string(), "incremental".to_string()]);
                 let incremental_task = IoTask::new(StorageTask::LoadRange {
-                    prefix: incremental_prefix,
+                    prefix: StorageKey::incremental_prefix(&self.doc_id),
                 });
 
                 let snapshot_task_id = snapshot_task.task_id;
