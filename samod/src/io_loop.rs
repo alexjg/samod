@@ -59,7 +59,7 @@ pub(crate) async fn io_loop<S: Storage, A: AnnouncePolicy>(
                     tracing::warn!(?actor_id, "received io result for unknown actor");
                     continue;
                 };
-                let _ = tx.send_blocking(ActorTask::IoComplete(result));
+                let _ = tx.try_send(ActorTask::IoComplete(result));
             }
         }
     }
@@ -70,7 +70,7 @@ pub(crate) async fn io_loop<S: Storage, A: AnnouncePolicy>(
             tracing::warn!(?actor_id, "received io result for unknown actor");
             continue;
         };
-        let _ = tx.send_blocking(ActorTask::IoComplete(result));
+        let _ = tx.try_send(ActorTask::IoComplete(result));
     }
 }
 

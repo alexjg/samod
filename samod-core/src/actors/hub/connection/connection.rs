@@ -5,7 +5,7 @@ use crate::{
     actors::{hub::HubResults, messages::SyncMessage},
     network::{
         ConnDirection, ConnectionInfo, ConnectionState, PeerDocState, PeerMetadata,
-        wire_protocol::WireMessage,
+        wire_protocol::{PROTOCOL_VERSION, WireMessage},
     },
 };
 
@@ -74,7 +74,7 @@ impl Connection {
                 created_at,
                 WireMessage::Join {
                     sender_id: local_peer_id.clone(),
-                    supported_protocol_versions: vec!["1".to_string()],
+                    supported_protocol_versions: vec![PROTOCOL_VERSION.to_string()],
                     metadata: local_metadata.as_ref().map(|meta| meta.to_wire(None)),
                 },
             );
@@ -107,7 +107,7 @@ impl Connection {
                         ?supported_protocol_versions,
                         "received Join message from peer"
                     );
-                    if !supported_protocol_versions.contains(&"1".to_string()) {
+                    if !supported_protocol_versions.contains(&PROTOCOL_VERSION.to_string()) {
                         tracing::warn!(conn_id=?self.id, "peer does not support protocol version 1");
                         self.send(
                             out,
@@ -125,7 +125,7 @@ impl Connection {
                         now,
                         WireMessage::Peer {
                             sender_id: self.local_peer_id.clone(),
-                            selected_protocol_version: "1".to_string(),
+                            selected_protocol_version: PROTOCOL_VERSION.to_string(),
                             target_id: sender_id.clone(),
                             metadata: self.local_metadata.as_ref().map(|meta| meta.to_wire(None)),
                         },
@@ -133,7 +133,7 @@ impl Connection {
                     self.phase = ConnectionPhase::Established(EstablishedConnection {
                         remote_peer_id: sender_id.clone(),
                         remote_metadata: metadata.map(PeerMetadata::from_wire),
-                        protocol_version: "1".to_string(),
+                        protocol_version: PROTOCOL_VERSION.to_string(),
                         established_at: now,
                         document_subscriptions: HashMap::new(),
                     });
@@ -172,7 +172,7 @@ impl Connection {
                         ?target_id,
                         "received Peer message from peer"
                     );
-                    if selected_protocol_version != "1" {
+                    if selected_protocol_version != PROTOCOL_VERSION {
                         tracing::warn!(conn_id=?self.id, "peer does not support protocol version 1");
                         self.send(
                             out,

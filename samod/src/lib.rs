@@ -333,8 +333,8 @@ pub struct Repo {
 }
 
 impl Repo {
-    // Create a new [`RepoBuilder`] which will build a [`Repo`] that spawns its
-    // tasks onto the provided runtime
+    /// Create a new [`RepoBuilder`] which will build a [`Repo`] that spawns its
+    /// tasks onto the provided runtime
     pub fn builder<R: runtime::RuntimeHandle>(
         runtime: R,
     ) -> RepoBuilder<InMemoryStorage, R, AlwaysAnnounce> {
@@ -351,12 +351,20 @@ impl Repo {
         builder::RepoBuilder::new(::tokio::runtime::Handle::current())
     }
 
-    // Create a new [`RepoBuilder`] which will build a [`Repo`] that spawns it's
-    // tasks onto a [`futures::executor::LocalPool`]
+    /// Create a new [`RepoBuilder`] which will build a [`Repo`] that spawns it's
+    /// tasks onto a [`futures::executor::LocalPool`]
     pub fn build_localpool(
         spawner: futures::executor::LocalSpawner,
     ) -> RepoBuilder<InMemoryStorage, futures::executor::LocalSpawner, AlwaysAnnounce> {
         builder::RepoBuilder::new(spawner)
+    }
+
+    /// Create a new [`RepoBuilder`] which will build a [`Repo`] that spawns it's
+    /// tasks using wasm-bindgen-futures for WASM environments
+    #[cfg(feature = "wasm")]
+    pub fn build_wasm()
+    -> RepoBuilder<InMemoryStorage, crate::runtime::wasm::WasmRuntime, AlwaysAnnounce> {
+        builder::RepoBuilder::new(crate::runtime::wasm::WasmRuntime::new())
     }
 
     /// Create a new [`Repo`] instance which will build a [`Repo`] that spawns
@@ -636,7 +644,7 @@ impl Repo {
                     .unwrap()
                     .connections
                     .get_mut(&connection_id)
-                    .map(|ConnHandle { rx, .. }| (rx.take()))
+                    .map(|ConnHandle { rx, .. }| rx.take())
                     .expect("connection not found");
                 rx.take().expect("receive end not found")
             };
@@ -809,7 +817,7 @@ impl Inner {
 
         for (actor_id, actor_msg) in actor_messages {
             if let Some(ActorHandle { tx, .. }) = self.actors.get(&actor_id) {
-                let _ = tx.send_blocking(ActorTask::HandleMessage(actor_msg));
+                let _ = tx.try_send(ActorTask::HandleMessage(actor_msg));
             } else {
                 tracing::warn!(?actor_id, "received message for unknown actor");
             }
@@ -880,29 +888,30 @@ impl Inner {
             DocRunner::Threadpool(threadpool) => {
                 threadpool.spawn(move || {
                     let _enter = span.enter();
-                    doc_inner.lock().unwrap().handle_results(init_results);
+                    futures::executor::block_on(async {
+                        doc_inner.lock().unwrap().handle_results(init_results);
 
-                    while let Ok(actor_task) = rx.recv_blocking() {
-                        let mut inner = doc_inner.lock().unwrap();
-                        inner.handle_task(actor_task);
-                        if inner.is_stopped() {
-                            tracing::debug!(?doc_id, ?actor_id, "actor stopped");
-                            break;
+                        while let Ok(actor_task) = rx.recv().await {
+                            let mut inner = doc_inner.lock().unwrap();
+                            inner.handle_task(actor_task);
+                            if inner.is_stopped() {
+                                tracing::debug!(?doc_id, ?actor_id, "actor stopped");
+                                break;
+                            }
                         }
-                    }
+                    })
                 });
             }
             DocRunner::Async { tx } => {
-                if tx
-                    .send_blocking(SpawnedActor {
-                        doc_id,
-                        actor_id,
-                        inner: doc_inner,
-                        rx_tasks: rx,
-                        init_results,
-                    })
-                    .is_err()
-                {
+                let spawn_result = SpawnedActor {
+                    doc_id,
+                    actor_id,
+                    inner: doc_inner,
+                    rx_tasks: rx,
+                    init_results,
+                };
+
+                if tx.try_send(spawn_result).is_err() {
                     tracing::error!(?actor_id, "actor spawner is gone");
                 }
             }

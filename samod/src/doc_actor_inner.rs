@@ -82,7 +82,7 @@ impl DocActorInner {
             stopped: _,
         } = results;
         for task in io_tasks {
-            if let Err(_e) = self.tx_io.send_blocking(IoLoopTask {
+            if let Err(_e) = self.tx_io.try_send(IoLoopTask {
                 doc_id: self.document_id.clone(),
                 task,
                 actor_id: self.actor_id,
@@ -93,7 +93,7 @@ impl DocActorInner {
         }
 
         for msg in outgoing_messages {
-            if let Err(_e) = self.tx_to_core.send_blocking((self.actor_id, msg)) {
+            if let Err(_e) = self.tx_to_core.try_send((self.actor_id, msg)) {
                 tracing::error!("core receiver dropped whilst document actor is still running");
                 return;
             }

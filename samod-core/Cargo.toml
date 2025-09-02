@@ -10,7 +10,7 @@ license = "MIT"
 [dependencies]
 base64 = "0.21"
 tracing = "0.1.41"
-uuid = { version = "1.0", features = ["v4", "serde"] }
+uuid = { version = "1.0", features = ["v4", "serde", "js"] }
 rand = "0.9"
 automerge = "0.6.1"
 serde = { version = "1.0", features = ["derive"] }
@@ -21,8 +21,21 @@ bs58 = { version = "0.5.1", features = ["check"] }
 sha2 = "0.10.9"
 
 [lib]
+crate-type = ["cdylib", "rlib"]
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+js-sys = { version = "0.3", optional = true }
+wasm-bindgen = { version = "0.2", optional = true }
+web-sys = { version = "0.3", optional = true }
+getrandom = { version = "0.3", features = ["wasm_js"] }
+
+[features]
+default = []
+wasm = ["js-sys", "wasm-bindgen", "web-sys"]
 
 [dev-dependencies]
 tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
-tokio = { version = "1.0", features = ["macros", "rt-multi-thread"] }
 samod-test-harness = { path = "../samod-test-harness" }
+
+[target.'cfg(not(taget_arch = "wasm32"))'.dev-dependencies]
+tokio = { version = "1.0", features = ["macros", "rt-multi-thread"] }

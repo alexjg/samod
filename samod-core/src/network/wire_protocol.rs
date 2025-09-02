@@ -1,6 +1,8 @@
 use crate::{DocumentId, PeerId, StorageId, actors::messages::SyncMessage};
 use std::{collections::HashMap, str::FromStr};
 
+pub const PROTOCOL_VERSION: &str = "1";
+
 /// Metadata sent in join or peer messages
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PeerMetadata {
@@ -734,7 +736,7 @@ mod tests {
     fn test_join_message_roundtrip() {
         let msg = WireMessage::Join {
             sender_id: PeerId::from("test-peer"),
-            supported_protocol_versions: vec!["1".to_string()],
+            supported_protocol_versions: vec![PROTOCOL_VERSION.to_string()],
             metadata: Some(PeerMetadata {
                 storage_id: Some(StorageId::new(&mut rand::rng())),
                 is_ephemeral: false,
@@ -750,7 +752,7 @@ mod tests {
     fn test_peer_message_roundtrip() {
         let msg = WireMessage::Peer {
             sender_id: PeerId::from("sender"),
-            selected_protocol_version: "1".to_string(),
+            selected_protocol_version: PROTOCOL_VERSION.to_string(),
             target_id: PeerId::from("target"),
             metadata: None,
         };
