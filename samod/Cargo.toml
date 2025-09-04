@@ -9,7 +9,7 @@ repository = "https://github.com/alexjg/samod"
 
 [features]
 tokio = ["dep:tokio", "dep:tokio-util"]
-axum = ["dep:axum", "dep:tokio", "dep:tokio-util"]
+axum = ["dep:axum", "tokio"]
 tungstenite = ["dep:tungstenite", "dep:tokio-tungstenite", "tokio"]
 gio = ["dep:gio", "dep:glib"]
 wasm = ["dep:wasm-bindgen", "dep:wasm-bindgen-futures", "dep:js-sys", "dep:web-sys", "samod-core/wasm"]
@@ -23,17 +23,20 @@ futures = "0.3.31"
 rand = "0.9.1"
 rayon = "1.10.0"
 samod-core = { path = "../samod-core", version = "0.3.1" }
-tokio = { version = "1.46.0", features = ["rt", "time", "fs"], optional = true }
-tokio-tungstenite = { version = "0.27.0", optional = true }
-tokio-util = { version = "0.7.15", features = [
-    "codec",
-    "net",
-], optional = true }
+tokio = { version = "1.46.0", features = ["rt", "time"], optional = true }
 tracing = "0.1.41"
 tungstenite = { version = "0.27.0", optional = true }
 gio = { version = "0.20.12", optional = true }
 glib = { version = "0.20.12", optional = true }
 async-channel = "2.5.0"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+tokio = { version = "1.46.0", features = ["fs"], optional = true }
+tokio-tungstenite = { version = "0.27.0", optional = true }
+tokio-util = { version = "0.7.15", features = [
+    "codec",
+    "net",
+], optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = { version = "0.2", optional = true }
@@ -55,6 +58,10 @@ web-sys = { version = "0.3", features = [
     "FileSystemFileHandle",
     "FileSystemWritableFileStream",
 ], optional = true }
+tokio = { version = "1.46.0", features = ["rt", "time"], optional = true }
+tokio-util = { version = "0.7.15", features = [
+    "codec",
+], optional = true }
 
 [dev-dependencies]
 eyre = "0.6.12"
@@ -65,14 +72,8 @@ reqwest = { version = "0.12.22", features = [
 tempfile = "3.20.0"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
 
-[target.'cfg(not(taget_arch = "wasm32"))'.dev-dependencies]
-tokio = { version = "1.46.0", features = [
-    "rt",
-    "time",
-    "macros",
-    "process",
-    "fs",
-] }
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+tokio = { version = "1.46.0", features = ["macros", "process"] }
 tokio-test = { version = "0.4.4" }
 tokio-stream = { version = "0.1.17", features = ["io-util"] }
 tokio-util = { version = "0.7.15", features = ["codec", "net"] }

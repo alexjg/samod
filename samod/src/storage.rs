@@ -4,14 +4,15 @@ use std::collections::HashMap;
 
 pub use samod_core::StorageKey;
 
+#[cfg(not(target_arch = "wasm32"))]
 mod filesystem;
 mod in_memory;
 pub use in_memory::InMemoryStorage;
 
-#[cfg(feature = "tokio")]
+#[cfg(all(feature = "tokio", not(target_arch = "wasm32")))]
 pub use filesystem::tokio::FilesystemStorage as TokioFilesystemStorage;
 
-#[cfg(feature = "gio")]
+#[cfg(all(feature = "gio", not(target_arch = "wasm32")))]
 pub use filesystem::gio::FilesystemStorage as GioFilesystemStorage;
 
 /// The storage abstraction used by a [`Repo`](crate::Repo) to store document data
