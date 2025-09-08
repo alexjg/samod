@@ -7,7 +7,13 @@ pub use samod_core::StorageKey;
 #[cfg(not(target_arch = "wasm32"))]
 mod filesystem;
 mod in_memory;
+#[cfg(target_arch = "wasm32")]
+mod indexeddb;
+
 pub use in_memory::InMemoryStorage;
+
+#[cfg(target_arch = "wasm32")]
+pub use indexeddb::IndexedDbStorage;
 
 #[cfg(all(feature = "tokio", not(target_arch = "wasm32")))]
 pub use filesystem::tokio::FilesystemStorage as TokioFilesystemStorage;
