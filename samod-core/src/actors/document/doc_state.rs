@@ -218,7 +218,7 @@ impl DocState {
         }
     }
 
-    pub fn handle_doc_message(
+    pub(crate) fn handle_doc_message(
         &mut self,
         now: UnixTimestamp,
         out: &mut DocActorResult,
