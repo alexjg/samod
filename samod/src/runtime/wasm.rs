@@ -1,7 +1,7 @@
 use std::pin::Pin;
-
-use crate::runtime::RuntimeHandle;
 use std::future::Future;
+
+use crate::runtime::{LocalRuntimeHandle, RuntimeHandle};
 
 pub struct WasmRuntime;
 
@@ -19,6 +19,12 @@ impl Default for WasmRuntime {
 
 impl RuntimeHandle for WasmRuntime {
     fn spawn(&self, f: Pin<Box<dyn Future<Output = ()> + Send + 'static>>) {
+        wasm_bindgen_futures::spawn_local(f);
+    }
+}
+
+impl LocalRuntimeHandle for WasmRuntime {
+    fn spawn(&self, f: Pin<Box<dyn Future<Output = ()>>>) {
         wasm_bindgen_futures::spawn_local(f);
     }
 }

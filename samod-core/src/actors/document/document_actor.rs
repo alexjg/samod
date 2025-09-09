@@ -45,6 +45,7 @@ pub struct DocumentActor {
 
 impl DocumentActor {
     /// Creates a new document actor for the specified document.
+    #[tracing::instrument(skip(initial_content, initial_connections))]
     pub fn new(
         now: UnixTimestamp,
         SpawnArgs {
@@ -73,7 +74,7 @@ impl DocumentActor {
 
         let mut actor = Self {
             document_id,
-            local_peer_id,
+            local_peer_id: local_peer_id.clone(),
             id: actor_id,
             doc_state: state,
             load_state,
@@ -235,6 +236,7 @@ impl DocumentActor {
         self.doc_state.is_ready()
     }
 
+    #[tracing::instrument(skip(self, input, out), fields(local_peer_id=%self.local_peer_id))]
     fn handle_input(&mut self, now: UnixTimestamp, input: ActorInput, out: &mut DocActorResult) {
         match input {
             ActorInput::Terminate => {

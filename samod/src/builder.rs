@@ -2,12 +2,25 @@ use samod_core::PeerId;
 
 use crate::{
     Repo,
-    announce_policy::{AlwaysAnnounce, AnnouncePolicy},
-    runtime::RuntimeHandle,
-    storage::{InMemoryStorage, Storage},
+    announce_policy::{AlwaysAnnounce, AnnouncePolicy, LocalAnnouncePolicy},
+    runtime::{LocalRuntimeHandle, RuntimeHandle},
+    storage::{InMemoryStorage, LocalStorage, Storage},
 };
 
 /// A struct for configuring a [`Repo`](crate::Repo)
+///
+/// ## `Send` and non-`Send` futures
+///
+/// Once you've finished configuring the builder, you call either [`load`](Self::load) or
+/// [`load_local`](Self::load_local) to create a [`Repo`]. The difference between the two is that
+/// [`load`](Self::load) is only available for runtimes which implement `RuntimeHandle` and
+/// thus require `Send` futures (such as tokio). [`load_local`](Self::load_local) on the other
+/// hand works with runtimes that implement [`LocalRuntimeHandle`] and thus does
+/// not require [`Send`] futures. If you want to use
+/// [`load_local`](Self::load_local) you need to configure the storage and
+/// announce policy implementations to be implementations of [`LocalStorage`]
+/// and [`LocalAnnouncePolicy`] respectively. See the [module level
+/// documentation on runtimes](./index.html#runtimes) for more details.
 pub struct RepoBuilder<S, R, A> {
     pub(crate) storage: S,
     pub(crate) runtime: R,
@@ -17,7 +30,7 @@ pub struct RepoBuilder<S, R, A> {
 }
 
 impl<S, R, A> RepoBuilder<S, R, A> {
-    pub fn with_storage<S2: Storage>(self, storage: S2) -> RepoBuilder<S2, R, A> {
+    pub fn with_storage<S2>(self, storage: S2) -> RepoBuilder<S2, R, A> {
         RepoBuilder {
             storage,
             peer_id: self.peer_id,
@@ -27,7 +40,7 @@ impl<S, R, A> RepoBuilder<S, R, A> {
         }
     }
 
-    pub fn with_runtime<R2: RuntimeHandle>(self, runtime: R2) -> RepoBuilder<S, R2, A> {
+    pub fn with_runtime<R2>(self, runtime: R2) -> RepoBuilder<S, R2, A> {
         RepoBuilder {
             runtime,
             peer_id: self.peer_id,
@@ -42,10 +55,7 @@ impl<S, R, A> RepoBuilder<S, R, A> {
         self
     }
 
-    pub fn with_announce_policy<A2: AnnouncePolicy>(
-        self,
-        announce_policy: A2,
-    ) -> RepoBuilder<S, R, A2> {
+    pub fn with_announce_policy<A2>(self, announce_policy: A2) -> RepoBuilder<S, R, A2> {
         RepoBuilder {
             runtime: self.runtime,
             peer_id: self.peer_id,
@@ -77,5 +87,12 @@ impl<S: Storage, R: RuntimeHandle, A: AnnouncePolicy> RepoBuilder<S, R, A> {
     /// Create the repository
     pub async fn load(self) -> Repo {
         Repo::load(self).await
+    }
+}
+
+impl<S: LocalStorage, R: LocalRuntimeHandle, A: LocalAnnouncePolicy> RepoBuilder<S, R, A> {
+    /// Create the repository
+    pub async fn load_local(self) -> Repo {
+        Repo::load_local(self).await
     }
 }

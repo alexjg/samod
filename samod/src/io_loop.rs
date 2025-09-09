@@ -8,7 +8,8 @@ use samod_core::{
 };
 
 use crate::{
-    ActorHandle, Inner, actor_task::ActorTask, announce_policy::AnnouncePolicy, storage::Storage,
+    ActorHandle, Inner, actor_task::ActorTask, announce_policy::LocalAnnouncePolicy,
+    storage::LocalStorage,
 };
 
 pub(crate) struct IoLoopTask {
@@ -23,7 +24,7 @@ struct IoLoopResult {
 }
 
 #[tracing::instrument(skip(inner, storage, announce_policy, rx))]
-pub(crate) async fn io_loop<S: Storage, A: AnnouncePolicy>(
+pub(crate) async fn io_loop<S: LocalStorage, A: LocalAnnouncePolicy>(
     local_peer_id: PeerId,
     inner: Arc<Mutex<Inner>>,
     storage: S,
@@ -74,7 +75,7 @@ pub(crate) async fn io_loop<S: Storage, A: AnnouncePolicy>(
     }
 }
 
-async fn dispatch_document_task<S: Storage, A: AnnouncePolicy>(
+async fn dispatch_document_task<S: LocalStorage, A: LocalAnnouncePolicy>(
     storage: S,
     announce: A,
     document_id: DocumentId,
@@ -95,7 +96,7 @@ async fn dispatch_document_task<S: Storage, A: AnnouncePolicy>(
 }
 
 #[tracing::instrument(skip(task, storage))]
-pub(crate) async fn dispatch_storage_task<S: Storage>(
+pub(crate) async fn dispatch_storage_task<S: LocalStorage>(
     task: StorageTask,
     storage: S,
 ) -> StorageResult {
