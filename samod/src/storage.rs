@@ -48,3 +48,38 @@ pub trait Storage: Send + Clone + 'static {
     /// Delete a value from storage
     fn delete(&self, key: StorageKey) -> impl Future<Output = ()> + Send;
 }
+
+/// A version of [`Storage`] that can be used with runtimes that don't require
+/// `Send` or `'static` bounds. See the [module level documentation on
+/// runtimes](../index.html#runtimes) for more details.
+pub trait LocalStorage: Clone + 'static {
+    /// Load a specific key from storage
+    fn load(&self, key: StorageKey) -> impl Future<Output = Option<Vec<u8>>>;
+    /// Load a range of keys from storage, all of which begin with `prefix`
+    ///
+    /// Note that you can use [`StorageKey::is_prefix_of`] to implement this
+    /// in simple cases
+    fn load_range(&self, prefix: StorageKey) -> impl Future<Output = HashMap<StorageKey, Vec<u8>>>;
+    /// Put a particular value into storage
+    fn put(&self, key: StorageKey, data: Vec<u8>) -> impl Future<Output = ()>;
+    /// Delete a value from storage
+    fn delete(&self, key: StorageKey) -> impl Future<Output = ()>;
+}
+
+impl<S: Storage> LocalStorage for S {
+    fn load(&self, key: StorageKey) -> impl Future<Output = Option<Vec<u8>>> {
+        Storage::load(self, key)
+    }
+
+    fn load_range(&self, prefix: StorageKey) -> impl Future<Output = HashMap<StorageKey, Vec<u8>>> {
+        Storage::load_range(self, prefix)
+    }
+
+    fn put(&self, key: StorageKey, data: Vec<u8>) -> impl Future<Output = ()> {
+        Storage::put(self, key, data)
+    }
+
+    fn delete(&self, key: StorageKey) -> impl Future<Output = ()> {
+        Storage::delete(self, key)
+    }
+}
