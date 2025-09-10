@@ -210,6 +210,10 @@ impl Request {
         doc: &Automerge,
         conn: &mut PeerDocConnection,
     ) -> Option<SyncMessage> {
+        let any_peer_is_syncing = self
+            .peer_states
+            .values()
+            .any(|s| matches!(s.state, PeerState::Syncing { .. }));
         let Some(peer) = self.peer_states.get_mut(&conn.connection_id) else {
             tracing::warn!(conn_id=?conn.connection_id, "no peer state for connection ID");
             return None;
@@ -217,6 +221,19 @@ impl Request {
         match &mut peer.state {
             PeerState::Requesting(requesting) => {
                 if !matches!(requesting, Requesting::AwaitingSend) {
+                    return None;
+                }
+                // If we're already syncing with another peer, don't send a request yet.
+                // Otherwise we end up in a situation where in topologies like this:
+                //
+                // alice <-> bob <-> carol <-> derek
+                //
+                // Alice could create a document and send it to bob, who then immediately
+                // starts requesting the document and sends a request to carol. If derek
+                // then requests the document from carol she will send an unavailable
+                // response back to derek because from her perspective all connected
+                // peers have requested a document she doesn't have
+                if any_peer_is_syncing {
                     return None;
                 }
                 conn.reset_sync_state();

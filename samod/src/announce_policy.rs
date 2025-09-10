@@ -30,6 +30,19 @@ pub trait AnnouncePolicy: Clone + Send + 'static {
     ) -> impl Future<Output = bool> + Send + 'static;
 }
 
+/// A version of [`AnnouncePolicy`] that can be used with runtimes that don't
+/// require `Send` or `'static` bounds. See the [module level documentation on
+/// runtimes](./index.html#runtimes) for more details.
+pub trait LocalAnnouncePolicy: Clone + 'static {
+    fn should_announce(&self, doc_id: DocumentId, peer_id: PeerId) -> impl Future<Output = bool>;
+}
+
+impl<A: AnnouncePolicy> LocalAnnouncePolicy for A {
+    fn should_announce(&self, doc_id: DocumentId, peer_id: PeerId) -> impl Future<Output = bool> {
+        AnnouncePolicy::should_announce(self, doc_id, peer_id)
+    }
+}
+
 impl<F> AnnouncePolicy for F
 where
     F: Fn(DocumentId, PeerId) -> bool + Clone + Send + 'static,

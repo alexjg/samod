@@ -1,36 +1,12 @@
-use std::{
-    collections::HashMap,
-    future::Future,
-    pin::Pin,
-    task::{Context, Poll},
-};
+use std::{collections::HashMap, future::Future};
 
 use indexed_db_futures::{database::Database, prelude::*, transaction::TransactionMode};
 use samod_core::StorageKey;
 use wasm_bindgen::JsValue;
 
-use crate::storage::Storage;
+use crate::storage::LocalStorage;
 
-/// A wrapper to make WASM futures Send
-struct SendFuture<F>(F);
-
-unsafe impl<F> Send for SendFuture<F> {}
-
-impl<F> std::fmt::Debug for SendFuture<F> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_tuple("SendFuture").field(&"<future>").finish()
-    }
-}
-
-impl<F: Future> Future for SendFuture<F> {
-    type Output = F::Output;
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        unsafe { Pin::new_unchecked(&mut self.get_unchecked_mut().0).poll(cx) }
-    }
-}
-
-/// A [`Storage`] implementation for browser WASM which stores data in IndexedDB
+/// A [`LocalStorage`] implementation for browser WASM which stores data in IndexedDB
 #[derive(Clone)]
 pub struct IndexedDbStorage {
     db_name: String,
@@ -86,11 +62,11 @@ impl Default for IndexedDbStorage {
     }
 }
 
-impl Storage for IndexedDbStorage {
+impl LocalStorage for IndexedDbStorage {
     #[tracing::instrument(skip(self), level = "trace", ret)]
-    fn load(&self, key: StorageKey) -> impl Future<Output = Option<Vec<u8>>> + Send {
+    fn load(&self, key: StorageKey) -> impl Future<Output = Option<Vec<u8>>> {
         let self_clone = self.clone();
-        SendFuture(async move {
+        async move {
             match self_clone.open_db().await {
                 Ok(db) => {
                     let tx = match db
@@ -138,16 +114,16 @@ impl Storage for IndexedDbStorage {
                     None
                 }
             }
-        })
+        }
     }
 
     #[tracing::instrument(skip(self), level = "trace", ret)]
     fn load_range(
         &self,
         prefix: StorageKey,
-    ) -> impl Future<Output = HashMap<StorageKey, Vec<u8>>> + Send {
+    ) -> impl Future<Output = HashMap<StorageKey, Vec<u8>>> {
         let self_clone = self.clone();
-        SendFuture(async move {
+        async move {
             let mut result = HashMap::new();
 
             match self_clone.open_db().await {
@@ -204,13 +180,13 @@ impl Storage for IndexedDbStorage {
             }
 
             result
-        })
+        }
     }
 
     #[tracing::instrument(skip(self, data), level = "trace")]
-    fn put(&self, key: StorageKey, data: Vec<u8>) -> impl Future<Output = ()> + Send {
+    fn put(&self, key: StorageKey, data: Vec<u8>) -> impl Future<Output = ()> {
         let self_clone = self.clone();
-        SendFuture(async move {
+        async move {
             match self_clone.open_db().await {
                 Ok(db) => {
                     let tx = match db
@@ -253,13 +229,13 @@ impl Storage for IndexedDbStorage {
                     tracing::error!("Failed to open database: {:?}", e);
                 }
             }
-        })
+        }
     }
 
     #[tracing::instrument(skip(self), level = "trace")]
-    fn delete(&self, key: StorageKey) -> impl Future<Output = ()> + Send {
+    fn delete(&self, key: StorageKey) -> impl Future<Output = ()> {
         let self_clone = self.clone();
-        SendFuture(async move {
+        async move {
             match self_clone.open_db().await {
                 Ok(db) => {
                     let tx = match db
@@ -300,6 +276,6 @@ impl Storage for IndexedDbStorage {
                     tracing::error!("Failed to open database: {:?}", e);
                 }
             }
-        })
+        }
     }
 }

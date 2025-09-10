@@ -30,9 +30,8 @@
 //!
 //! Typically then, your workflow will look like this:
 //!
-//! * Initialize a `Repo` at application startup, passing it a
-//!   [`RuntimeHandle`](crate::runtime::RuntimeHandle) implementation and
-//!   [`Storage`] implementation
+//! * Initialize a `Repo` at application startup, passing it a [`RuntimeHandle`]
+//!   implementation and [`Storage`] implementation
 //! * Whenever you have connections available (maybe you are connecting to a
 //!   sync server, maybe you are receiving peer-to-peer connections) you call
 //!   [`Repo::connect`] to drive the connection state.
@@ -58,17 +57,22 @@
 //! })
 //! ```
 //!
-//! The first argument to `builder` is an implementation of
-//! [`RuntimeHandle`](crate::runtime::RuntimeHandle). Default implementations
-//! are provided for `tokio` and `gio` which can be conveniently used via
-//! [`Repo::build_tokio`] and [`Repo::build_gio`] respectively. The
-//! [`RuntimeHandle`](crate::runtime::RuntimeHandle) trait is straightforward to
-//! implement if you want to use some other async runtime.
+//! The first argument to `builder` is an implementation of [`RuntimeHandle`].
+//! Default implementations are provided for `tokio` and `gio` which can be
+//! conveniently used via [`Repo::build_tokio`] and [`Repo::build_gio`]
+//! respectively. The [`RuntimeHandle`] trait is straightforward to implement if
+//! you want to use some other async runtime.
 //!
 //! By default `samod` uses an in-memory storage implementation. This is great
 //! for prototyping but in most cases you do actually want to persist data somewhere.
 //! In this case you'll need an implementation of [`Storage`] to pass to
 //! [`RepoBuilder::with_storage`]
+//!
+//! It is possible to use [`Storage`] and [`AnnouncePolicy`] implementations which
+//! do not produce `Send` futures. In this case you will also need a runtime which
+//! can spawn non-`Send` futures. See the [runtimes](#runtimes) section for more
+//! details.
+//!
 //!
 //! ### Connecting to peers
 //!
@@ -161,6 +165,27 @@
 //! }).load().await;
 //! # });
 //! ```
+//!
+//! ## Runtimes
+//!
+//! [`RuntimeHandle`] is a trait which is intended to abstract over the various
+//! runtimes available in the rust ecosystem. The most common runtime is `tokio`.
+//! `tokio` is a work-stealing runtime which means that the futures spawned on it
+//! must be [`Send`], so that they can be moved between threads. This means that
+//! [`RuntimeHandle::spawn`] requires [`Send`] futures. This in turn means that
+//! the futures returned by the [`Storage`] and [`AnnouncePolicy`] traits are
+//! also [`Send`] so that they can be spawned onto the [`RuntimeHandle`].
+//!
+//! In many cases though, you may have a runtime which doesn't require [`Send`]
+//! futures and you may have storage and announce policy implementations which
+//! cannot produce [`Send`] futures. This would often be the case in single
+//! threaded runtimes for example. In these cases you can instead implement
+//! [`LocalRuntimeHandle`], which doesn't require [`Send`] futures and then
+//! you implement [`LocalStorage`] and [`LocalAnnouncePolicy`] traits for
+//! your storage and announce policy implementations. You configure all these
+//! things via the [`RepoBuilder`] struct. Once you've configured the storage
+//! and announce policy implementations to use local variants you can then
+//! create a local [`Repo`] using [`RepoBuilder::load_local`].
 //!
 //! ## Why not just Automerge?
 //!
@@ -260,6 +285,7 @@ use futures::{
     stream::FuturesUnordered,
 };
 use rand::SeedableRng;
+use rayon::ThreadPool;
 pub use samod_core::{AutomergeUrl, DocumentId, PeerId, network::ConnDirection};
 use samod_core::{
     CommandId, CommandResult, ConnectionId, DocumentActorId, LoaderState, UnixTimestamp,
@@ -293,12 +319,16 @@ pub use peer_connection_info::ConnectionInfo;
 mod stopped;
 pub use stopped::Stopped;
 pub mod storage;
-pub use crate::announce_policy::{AlwaysAnnounce, AnnouncePolicy};
-use crate::storage::InMemoryStorage;
+pub use crate::announce_policy::{AlwaysAnnounce, AnnouncePolicy, LocalAnnouncePolicy};
 use crate::{
     doc_actor_inner::DocActorInner,
     doc_runner::{DocRunner, SpawnedActor},
     storage::Storage,
+};
+use crate::{
+    io_loop::IoLoopTask,
+    runtime::{LocalRuntimeHandle, RuntimeHandle},
+    storage::{InMemoryStorage, LocalStorage},
 };
 pub mod runtime;
 pub mod websocket;
@@ -389,79 +419,30 @@ impl Repo {
             announce_policy,
             threadpool,
         } = builder;
-        let mut rng = rand::rngs::StdRng::from_rng(&mut rand::rng());
-        let peer_id = peer_id.unwrap_or_else(|| PeerId::new_with_rng(&mut rng));
-        let mut loading = Hub::load(peer_id.clone());
-        let mut running_tasks = FuturesUnordered::new();
-        let hub = loop {
-            match loading.step(&mut rng, UnixTimestamp::now()) {
-                LoaderState::NeedIo(items) => {
-                    for IoTask {
-                        task_id,
-                        action: task,
-                    } in items
-                    {
-                        let storage = storage.clone();
-                        running_tasks.push(async move {
-                            let result = io_loop::dispatch_storage_task(task, storage).await;
-                            (task_id, result)
-                        })
-                    }
-                }
-                LoaderState::Loaded(hub) => break hub,
-            }
-            let (task_id, next_result) = running_tasks.select_next_some().await;
-            loading.provide_io_result(IoResult {
-                task_id,
-                payload: next_result,
-            });
-        };
+        let task_setup = TaskSetup::new(storage.clone(), peer_id, threadpool).await;
+        let inner = task_setup.inner.clone();
+        task_setup.spawn_tasks(runtime, storage, announce_policy);
+        Self { inner }
+    }
 
-        let (tx_storage, rx_storage) = async_channel::unbounded();
-        let (tx_to_core, rx_from_core) = async_channel::unbounded();
-        let doc_runner = if let Some(threadpool) = threadpool {
-            DocRunner::Threadpool(threadpool)
-        } else {
-            let (tx, rx) = async_channel::unbounded();
-            runtime.spawn(async_actor_runner(rx).boxed());
-            DocRunner::Async { tx }
-        };
-        let inner = Arc::new(Mutex::new(Inner {
-            doc_runner,
-            actors: HashMap::new(),
-            hub: *hub,
-            pending_commands: HashMap::new(),
-            connections: HashMap::new(),
-            tx_io: tx_storage,
-            tx_to_core,
-            waiting_for_connection: HashMap::new(),
-            stop_waiters: Vec::new(),
-            rng: rand::rngs::StdRng::from_os_rng(),
-        }));
-
-        runtime.spawn(
-            io_loop::io_loop(
-                peer_id.clone(),
-                inner.clone(),
-                storage,
-                announce_policy,
-                rx_storage,
-            )
-            .boxed(),
-        );
-        runtime.spawn({
-            let inner = inner.clone();
-            async move {
-                let rx = rx_from_core;
-                while let Ok((actor_id, msg)) = rx.recv().await {
-                    let event = HubEvent::actor_message(actor_id, msg);
-                    inner.lock().unwrap().handle_event(event);
-                }
-            }
-            .instrument(tracing::info_span!("actor_loop", local_peer_id=%peer_id))
-            .boxed()
-        });
-
+    pub(crate) async fn load_local<
+        'a,
+        R: runtime::LocalRuntimeHandle + 'a,
+        S: LocalStorage + 'a,
+        A: LocalAnnouncePolicy + 'a,
+    >(
+        builder: RepoBuilder<S, R, A>,
+    ) -> Self {
+        let RepoBuilder {
+            storage,
+            runtime,
+            peer_id,
+            announce_policy,
+            threadpool,
+        } = builder;
+        let task_setup = TaskSetup::new(storage.clone(), peer_id, threadpool).await;
+        let inner = task_setup.inner.clone();
+        task_setup.spawn_tasks_local(runtime, storage, announce_policy);
         Self { inner }
     }
 
@@ -888,30 +869,29 @@ impl Inner {
             DocRunner::Threadpool(threadpool) => {
                 threadpool.spawn(move || {
                     let _enter = span.enter();
-                    futures::executor::block_on(async {
-                        doc_inner.lock().unwrap().handle_results(init_results);
+                    doc_inner.lock().unwrap().handle_results(init_results);
 
-                        while let Ok(actor_task) = rx.recv().await {
-                            let mut inner = doc_inner.lock().unwrap();
-                            inner.handle_task(actor_task);
-                            if inner.is_stopped() {
-                                tracing::debug!(?doc_id, ?actor_id, "actor stopped");
-                                break;
-                            }
+                    while let Ok(actor_task) = rx.try_recv() {
+                        let mut inner = doc_inner.lock().unwrap();
+                        inner.handle_task(actor_task);
+                        if inner.is_stopped() {
+                            tracing::debug!(?doc_id, ?actor_id, "actor stopped");
+                            break;
                         }
-                    })
+                    }
                 });
             }
             DocRunner::Async { tx } => {
-                let spawn_result = SpawnedActor {
-                    doc_id,
-                    actor_id,
-                    inner: doc_inner,
-                    rx_tasks: rx,
-                    init_results,
-                };
-
-                if tx.try_send(spawn_result).is_err() {
+                if tx
+                    .try_send(SpawnedActor {
+                        doc_id,
+                        actor_id,
+                        inner: doc_inner,
+                        rx_tasks: rx,
+                        init_results,
+                    })
+                    .is_err()
+                {
                     tracing::error!(?actor_id, "actor spawner is gone");
                 }
             }
@@ -964,6 +944,165 @@ async fn async_actor_runner(rx: async_channel::Receiver<SpawnedActor>) {
     // Wait for all actors to stop
     while running_actors.next().await.is_some() {
         // nothing to do
+    }
+}
+
+/// All the information needed to spawn the background tasks
+///
+/// When we construct a `Repo` we need to spawn a number of tasks onto the
+/// runtime to do things like handle storage tasks. We have to split the
+/// spawn process into two stages:
+///
+/// * Create the channels which are used to communicate with the background tasks
+/// * Spawn the background tasks onto the runtime
+///
+/// The reason we have to split into these two stages is so that we can work with
+/// runtimes that don't support non-`Send` tasks. This split is represented by the
+/// `TaskSetup::spawn_tasks` and `TaskSetup::spawn_tasks_local` methods.
+struct TaskSetup {
+    peer_id: PeerId,
+    inner: Arc<Mutex<Inner>>,
+    rx_storage: async_channel::Receiver<IoLoopTask>,
+    rx_from_core: async_channel::Receiver<(DocumentActorId, DocToHubMsg)>,
+    rx_actor: Option<async_channel::Receiver<SpawnedActor>>,
+}
+
+impl TaskSetup {
+    async fn new<S: LocalStorage>(
+        storage: S,
+        peer_id: Option<PeerId>,
+        threadpool: Option<ThreadPool>,
+    ) -> TaskSetup {
+        let mut rng = rand::rngs::StdRng::from_rng(&mut rand::rng());
+        let peer_id = peer_id.unwrap_or_else(|| PeerId::new_with_rng(&mut rng));
+        let hub = load_hub(storage.clone(), Hub::load(peer_id.clone())).await;
+
+        let (tx_storage, rx_storage) = async_channel::unbounded();
+        let (tx_to_core, rx_from_core) = async_channel::unbounded();
+        let mut rx_actor = None;
+        let doc_runner = if let Some(threadpool) = threadpool {
+            DocRunner::Threadpool(threadpool)
+        } else {
+            let (tx, rx) = async_channel::unbounded();
+            rx_actor = Some(rx);
+            // tasks.push(async_actor_runner(rx).boxed_local());
+            DocRunner::Async { tx }
+        };
+        let inner = Arc::new(Mutex::new(Inner {
+            doc_runner,
+            actors: HashMap::new(),
+            hub: *hub,
+            pending_commands: HashMap::new(),
+            connections: HashMap::new(),
+            tx_io: tx_storage,
+            tx_to_core,
+            waiting_for_connection: HashMap::new(),
+            stop_waiters: Vec::new(),
+            rng: rand::rngs::StdRng::from_os_rng(),
+        }));
+
+        TaskSetup {
+            peer_id,
+            inner,
+            rx_actor,
+            rx_from_core,
+            rx_storage,
+        }
+    }
+    fn spawn_tasks_local<R: LocalRuntimeHandle, S: LocalStorage, A: LocalAnnouncePolicy>(
+        self,
+        runtime: R,
+        storage: S,
+        announce_policy: A,
+    ) {
+        runtime.spawn(
+            io_loop::io_loop(
+                self.peer_id.clone(),
+                self.inner.clone(),
+                storage,
+                announce_policy,
+                self.rx_storage,
+            )
+            .boxed_local(),
+        );
+        runtime.spawn({
+            let peer_id = self.peer_id.clone();
+            let inner = self.inner.clone();
+            async move {
+                let rx = self.rx_from_core;
+                while let Ok((actor_id, msg)) = rx.recv().await {
+                    let event = HubEvent::actor_message(actor_id, msg);
+                    inner.lock().unwrap().handle_event(event);
+                }
+            }
+            .instrument(tracing::info_span!("actor_loop", local_peer_id=%peer_id))
+            .boxed_local()
+        });
+        if let Some(rx_actor) = self.rx_actor {
+            runtime.spawn(async_actor_runner(rx_actor).boxed_local());
+        }
+    }
+
+    fn spawn_tasks<R: RuntimeHandle, S: Storage, A: AnnouncePolicy>(
+        self,
+        runtime: R,
+        storage: S,
+        announce_policy: A,
+    ) {
+        runtime.spawn(
+            io_loop::io_loop(
+                self.peer_id.clone(),
+                self.inner.clone(),
+                storage,
+                announce_policy,
+                self.rx_storage,
+            )
+            .boxed(),
+        );
+        runtime.spawn({
+            let peer_id = self.peer_id.clone();
+            let inner = self.inner.clone();
+            async move {
+                let rx = self.rx_from_core;
+                while let Ok((actor_id, msg)) = rx.recv().await {
+                    let event = HubEvent::actor_message(actor_id, msg);
+                    inner.lock().unwrap().handle_event(event);
+                }
+            }
+            .instrument(tracing::info_span!("actor_loop", local_peer_id=%peer_id))
+            .boxed()
+        });
+        if let Some(rx_actor) = self.rx_actor {
+            runtime.spawn(async_actor_runner(rx_actor).boxed());
+        }
+    }
+}
+
+async fn load_hub<S: LocalStorage>(storage: S, mut loading: samod_core::SamodLoader) -> Box<Hub> {
+    let mut rng = rand::rngs::StdRng::from_os_rng();
+    let mut running_tasks = FuturesUnordered::new();
+    loop {
+        match loading.step(&mut rng, UnixTimestamp::now()) {
+            LoaderState::NeedIo(items) => {
+                for IoTask {
+                    task_id,
+                    action: task,
+                } in items
+                {
+                    let storage = storage.clone();
+                    running_tasks.push(async move {
+                        let result = io_loop::dispatch_storage_task(task, storage).await;
+                        (task_id, result)
+                    })
+                }
+            }
+            LoaderState::Loaded(hub) => break hub,
+        }
+        let (task_id, next_result) = running_tasks.select_next_some().await;
+        loading.provide_io_result(IoResult {
+            task_id,
+            payload: next_result,
+        });
     }
 }
 

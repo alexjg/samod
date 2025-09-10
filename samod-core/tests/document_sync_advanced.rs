@@ -461,3 +461,57 @@ fn peer_with_announce_policy_set_to_false_does_not_request() {
     // announcing
     assert!(network.samod(&bob).find_document(&doc_id).is_none());
 }
+
+#[test]
+fn sync_while_requesting() {
+    // Say we have three peers connected like this:
+    //
+    // alice <-> bob <-> charlie <-> derek
+    //
+    // Alice is configured to announce everything to bob. The scenario this
+    // tests exercises is when Alice creates a document and Derek queries
+    // for it before the sync from Alice to Bob to Charlie has completed. There
+    // was a bug where the request handling logic meant that Derek would not
+    // find the document. The buggy request logic was something like this:
+    //
+    // "When you receive a sync message for a document not in storage, send
+    // a request to every peer you are connected to for the document"
+    //
+    // This resulted in this sequence of events:
+    //
+    // * Alice announces document to bob
+    // * Bob begins syncing with Alice
+    // * Bob also sends a request to Charlie for the document
+    // * The `find` call is issued to Derek
+    // * Derek sends a request to Charlie
+    //
+    // At this point Charlie has received a request from Bob and a request from
+    // Derek, from Charlies perspective no-one has the document so he returns a
+    // not-available response to Derek.
+
+    init_logging();
+    let mut network = Network::new();
+    let alice = network.create_samod("alice");
+    let bob = network.create_samod("bob");
+    let charlie = network.create_samod("charlie");
+    let derek = network.create_samod("derek");
+
+    network.connect(alice, bob);
+    network.connect(bob, charlie);
+    network.connect(charlie, derek);
+
+    network.run_until_quiescent();
+
+    // Create the document on alice
+    let RunningDocIds { doc_id, .. } = network.samod(&alice).create_document();
+
+    let find_command = network.samod(&derek).begin_find_document(&doc_id);
+
+    network.run_until_quiescent();
+
+    let _ = network
+        .samod(&derek)
+        .check_find_document_result(find_command)
+        .expect("error running find command")
+        .expect("derek should have the doc");
+}
