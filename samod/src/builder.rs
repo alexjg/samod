@@ -7,6 +7,18 @@ use crate::{
     storage::{InMemoryStorage, LocalStorage, Storage},
 };
 
+/// How to run concurrent documents
+///
+/// See the [concurrency section](./index.html#concurrency) of the module level
+/// documentation
+pub enum ConcurrencyConfig {
+    /// Run each document in a separate task on the async runtime
+    AsyncRuntime,
+    /// Run each document on a rayon threadpool
+    #[cfg(feature = "threadpool")]
+    Threadpool(rayon::ThreadPool),
+}
+
 /// A struct for configuring a [`Repo`](crate::Repo)
 ///
 /// ## `Send` and non-`Send` futures
@@ -26,7 +38,7 @@ pub struct RepoBuilder<S, R, A> {
     pub(crate) runtime: R,
     pub(crate) announce_policy: A,
     pub(crate) peer_id: Option<PeerId>,
-    pub(crate) threadpool: Option<rayon::ThreadPool>,
+    pub(crate) concurrency: ConcurrencyConfig,
 }
 
 impl<S, R, A> RepoBuilder<S, R, A> {
@@ -36,7 +48,7 @@ impl<S, R, A> RepoBuilder<S, R, A> {
             peer_id: self.peer_id,
             runtime: self.runtime,
             announce_policy: self.announce_policy,
-            threadpool: self.threadpool,
+            concurrency: self.concurrency,
         }
     }
 
@@ -46,7 +58,7 @@ impl<S, R, A> RepoBuilder<S, R, A> {
             peer_id: self.peer_id,
             storage: self.storage,
             announce_policy: self.announce_policy,
-            threadpool: self.threadpool,
+            concurrency: self.concurrency,
         }
     }
 
@@ -61,12 +73,16 @@ impl<S, R, A> RepoBuilder<S, R, A> {
             peer_id: self.peer_id,
             storage: self.storage,
             announce_policy,
-            threadpool: self.threadpool,
+            concurrency: self.concurrency,
         }
     }
 
-    pub fn with_threadpool(mut self, threadpool: Option<rayon::ThreadPool>) -> Self {
-        self.threadpool = threadpool;
+    /// Configure how the repository should process concurrent documents
+    ///
+    /// See the [concurrency section](./index.html#concurrency) of the module level
+    /// documentation
+    pub fn with_concurrency(mut self, concurrency: ConcurrencyConfig) -> Self {
+        self.concurrency = concurrency;
         self
     }
 }
@@ -78,7 +94,7 @@ impl<R> RepoBuilder<InMemoryStorage, R, AlwaysAnnounce> {
             runtime,
             peer_id: None,
             announce_policy: AlwaysAnnounce,
-            threadpool: None,
+            concurrency: ConcurrencyConfig::AsyncRuntime,
         }
     }
 }

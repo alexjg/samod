@@ -187,6 +187,20 @@
 //! and announce policy implementations to use local variants you can then
 //! create a local [`Repo`] using [`RepoBuilder::load_local`].
 //!
+//! ## Concurrency
+//!
+//! Typically `samod` will be managing many documents. One for each [`DocHandle`]
+//! you retrieve via [`Repo::create`] or [`Repo::find`] but also one for any
+//! sync messages received about a particular document from remote peers (e.g.
+//! a sync server would have no [`DocHandle`]s open but would still be running
+//! many document processes). By default document tasks will be handled on the
+//! async runtime provided to the [`RepoBuilder`] but this can be undesirable.
+//! Document operations can be compute intensive and so responsiveness may
+//! benefit from running them on a separate thread pool. This is the purpose
+//! of the [`RepoBuilder::with_concurrency`] method, which allows you to
+//! configure how document operations are processed. If you want to use the
+//! threadpool approach you will need to enable the `threadpool` feature.
+//!
 //! ## Why not just Automerge?
 //!
 //! `automerge` is a low level library. It provides routines for manipulating
@@ -285,7 +299,6 @@ use futures::{
     stream::FuturesUnordered,
 };
 use rand::SeedableRng;
-use rayon::ThreadPool;
 pub use samod_core::{AutomergeUrl, DocumentId, PeerId, network::ConnDirection};
 use samod_core::{
     CommandId, CommandResult, ConnectionId, DocumentActorId, LoaderState, UnixTimestamp,
@@ -320,10 +333,12 @@ mod stopped;
 pub use stopped::Stopped;
 pub mod storage;
 pub use crate::announce_policy::{AlwaysAnnounce, AnnouncePolicy, LocalAnnouncePolicy};
+pub use crate::builder::ConcurrencyConfig;
 use crate::{
     doc_actor_inner::DocActorInner,
     doc_runner::{DocRunner, SpawnedActor},
     storage::Storage,
+    unbounded::{UnboundedReceiver, UnboundedSender},
 };
 use crate::{
     io_loop::IoLoopTask,
@@ -331,6 +346,7 @@ use crate::{
     storage::{InMemoryStorage, LocalStorage},
 };
 pub mod runtime;
+mod unbounded;
 pub mod websocket;
 
 /// The entry point to this library
@@ -409,9 +425,9 @@ impl Repo {
             runtime,
             peer_id,
             announce_policy,
-            threadpool,
+            concurrency,
         } = builder;
-        let task_setup = TaskSetup::new(storage.clone(), peer_id, threadpool).await;
+        let task_setup = TaskSetup::new(storage.clone(), peer_id, concurrency).await;
         let inner = task_setup.inner.clone();
         task_setup.spawn_tasks(runtime, storage, announce_policy);
         Self { inner }
@@ -430,9 +446,9 @@ impl Repo {
             runtime,
             peer_id,
             announce_policy,
-            threadpool,
+            concurrency,
         } = builder;
-        let task_setup = TaskSetup::new(storage.clone(), peer_id, threadpool).await;
+        let task_setup = TaskSetup::new(storage.clone(), peer_id, concurrency).await;
         let inner = task_setup.inner.clone();
         task_setup.spawn_tasks_local(runtime, storage, announce_policy);
         Self { inner }
@@ -724,8 +740,8 @@ struct Inner {
     hub: Hub,
     pending_commands: HashMap<CommandId, oneshot::Sender<CommandResult>>,
     connections: HashMap<ConnectionId, ConnHandle>,
-    tx_io: async_channel::Sender<io_loop::IoLoopTask>,
-    tx_to_core: async_channel::Sender<(DocumentActorId, DocToHubMsg)>,
+    tx_io: UnboundedSender<io_loop::IoLoopTask>,
+    tx_to_core: UnboundedSender<(DocumentActorId, DocToHubMsg)>,
     waiting_for_connection: HashMap<PeerId, Vec<oneshot::Sender<()>>>,
     stop_waiters: Vec<oneshot::Sender<()>>,
     rng: rand::rngs::StdRng,
@@ -790,7 +806,7 @@ impl Inner {
 
         for (actor_id, actor_msg) in actor_messages {
             if let Some(ActorHandle { tx, .. }) = self.actors.get(&actor_id) {
-                let _ = tx.send_blocking(ActorTask::HandleMessage(actor_msg));
+                let _ = tx.unbounded_send(ActorTask::HandleMessage(actor_msg));
             } else {
                 tracing::warn!(?actor_id, "received message for unknown actor");
             }
@@ -834,7 +850,7 @@ impl Inner {
 
     #[tracing::instrument(skip(self, args))]
     fn spawn_actor(&mut self, args: SpawnArgs) {
-        let (tx, rx) = async_channel::unbounded();
+        let (tx, rx) = unbounded::channel();
         let actor_id = args.actor_id();
         let doc_id = args.document_id().clone();
         let (actor, init_results) = DocumentActor::new(UnixTimestamp::now(), args);
@@ -856,9 +872,10 @@ impl Inner {
             },
         );
 
-        let span = tracing::Span::current();
         match &mut self.doc_runner {
+            #[cfg(feature = "threadpool")]
             DocRunner::Threadpool(threadpool) => {
+                let span = tracing::Span::current();
                 threadpool.spawn(move || {
                     let _enter = span.enter();
                     doc_inner.lock().unwrap().handle_results(init_results);
@@ -875,7 +892,7 @@ impl Inner {
             }
             DocRunner::Async { tx } => {
                 if tx
-                    .send_blocking(SpawnedActor {
+                    .unbounded_send(SpawnedActor {
                         doc_id,
                         actor_id,
                         inner: doc_inner,
@@ -900,7 +917,7 @@ impl Inner {
 /// futures::executor::LocalPool). Instead, we spawn a task on the runtime which
 /// listens on a channel for new actors to spawn and then runs them on a
 /// `FuturesUnordered`. This function is that task.
-async fn async_actor_runner(rx: async_channel::Receiver<SpawnedActor>) {
+async fn async_actor_runner(rx: UnboundedReceiver<SpawnedActor>) {
     let mut running_actors = FuturesUnordered::new();
 
     loop {
@@ -954,32 +971,37 @@ async fn async_actor_runner(rx: async_channel::Receiver<SpawnedActor>) {
 struct TaskSetup {
     peer_id: PeerId,
     inner: Arc<Mutex<Inner>>,
-    rx_storage: async_channel::Receiver<IoLoopTask>,
-    rx_from_core: async_channel::Receiver<(DocumentActorId, DocToHubMsg)>,
-    rx_actor: Option<async_channel::Receiver<SpawnedActor>>,
+    rx_storage: UnboundedReceiver<IoLoopTask>,
+    rx_from_core: UnboundedReceiver<(DocumentActorId, DocToHubMsg)>,
+    rx_actor: Option<UnboundedReceiver<SpawnedActor>>,
 }
 
 impl TaskSetup {
     async fn new<S: LocalStorage>(
         storage: S,
         peer_id: Option<PeerId>,
-        threadpool: Option<ThreadPool>,
+        concurrency: ConcurrencyConfig,
     ) -> TaskSetup {
         let mut rng = rand::rngs::StdRng::from_rng(&mut rand::rng());
         let peer_id = peer_id.unwrap_or_else(|| PeerId::new_with_rng(&mut rng));
         let hub = load_hub(storage.clone(), Hub::load(peer_id.clone())).await;
 
-        let (tx_storage, rx_storage) = async_channel::unbounded();
-        let (tx_to_core, rx_from_core) = async_channel::unbounded();
-        let mut rx_actor = None;
-        let doc_runner = if let Some(threadpool) = threadpool {
-            DocRunner::Threadpool(threadpool)
-        } else {
-            let (tx, rx) = async_channel::unbounded();
-            rx_actor = Some(rx);
-            // tasks.push(async_actor_runner(rx).boxed_local());
-            DocRunner::Async { tx }
+        let (tx_storage, rx_storage) = unbounded::channel();
+        let (tx_to_core, rx_from_core) = unbounded::channel();
+        let rx_actor: Option<UnboundedReceiver<SpawnedActor>>;
+        let doc_runner = match concurrency {
+            #[cfg(feature = "threadpool")]
+            ConcurrencyConfig::Threadpool(threadpool) => {
+                rx_actor = None;
+                DocRunner::Threadpool(threadpool)
+            }
+            ConcurrencyConfig::AsyncRuntime => {
+                let (tx, rx) = unbounded::channel();
+                rx_actor = Some(rx);
+                DocRunner::Async { tx }
+            }
         };
+
         let inner = Arc::new(Mutex::new(Inner {
             doc_runner,
             actors: HashMap::new(),

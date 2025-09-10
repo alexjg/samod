@@ -18,6 +18,8 @@ jobs:
       - name: Build
         run: cargo build --verbose --features tokio
       - name: clippy
-        run: cargo clippy --all-targets --features tokio -- -D warnings
+        run: cargo clippy --all-targets --features samod/tokio,samod/threadpool,samod/axum,samod/tungstenite -- -D warnings
       - name: Run tests
-        run: cargo test --features tokio --verbose
+        run: cargo test --features samod/tokio,samod/threadpool,samod/axum,samod/tungstenite --verbose
+      - name: Run tests without features
+        run: cargo test --verbose --tests

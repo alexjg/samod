@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use automerge::Automerge;
-use samod::{PeerId, Repo, storage::InMemoryStorage};
+use samod::{ConcurrencyConfig, PeerId, Repo, storage::InMemoryStorage};
 mod tincans;
 
 fn init_logging() {
@@ -52,6 +52,53 @@ async fn basic_sync() {
 
     let bob = Repo::build_tokio()
         .with_peer_id(PeerId::from("bob"))
+        .load()
+        .await;
+
+    tincans::connect_repos(&alice, &bob);
+
+    bob.when_connected(alice.peer_id()).await.unwrap();
+    alice.when_connected(bob.peer_id()).await.unwrap();
+
+    let alice_handle = alice.create(Automerge::new()).await.unwrap();
+    alice_handle.with_document(|am| {
+        use automerge::{AutomergeError, ROOT};
+
+        am.transact::<_, _, AutomergeError>(|tx| {
+            use automerge::transaction::Transactable;
+
+            tx.put(ROOT, "foo", "bar")?;
+            Ok(())
+        })
+        .unwrap();
+    });
+
+    let bob_handle = bob.find(alice_handle.document_id().clone()).await.unwrap();
+    assert!(bob_handle.is_some());
+    bob.stop().await;
+    alice.stop().await;
+}
+
+#[tokio::test]
+#[cfg(feature = "threadpool")]
+async fn basic_sync_threadpool() {
+    use samod::PeerId;
+
+    init_logging();
+
+    let alice = Repo::build_tokio()
+        .with_peer_id(PeerId::from("alice"))
+        .with_concurrency(ConcurrencyConfig::Threadpool(
+            rayon::ThreadPoolBuilder::new().build().unwrap(),
+        ))
+        .load()
+        .await;
+
+    let bob = Repo::build_tokio()
+        .with_peer_id(PeerId::from("bob"))
+        .with_concurrency(ConcurrencyConfig::Threadpool(
+            rayon::ThreadPoolBuilder::new().build().unwrap(),
+        ))
         .load()
         .await;
 
