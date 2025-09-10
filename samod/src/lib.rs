@@ -379,8 +379,8 @@ pub struct Repo {
 }
 
 impl Repo {
-    // Create a new [`RepoBuilder`] which will build a [`Repo`] that spawns its
-    // tasks onto the provided runtime
+    /// Create a new [`RepoBuilder`] which will build a [`Repo`] that spawns its
+    /// tasks onto the provided runtime
     pub fn builder<R: runtime::RuntimeHandle>(
         runtime: R,
     ) -> RepoBuilder<InMemoryStorage, R, AlwaysAnnounce> {
@@ -397,12 +397,20 @@ impl Repo {
         builder::RepoBuilder::new(::tokio::runtime::Handle::current())
     }
 
-    // Create a new [`RepoBuilder`] which will build a [`Repo`] that spawns it's
-    // tasks onto a [`futures::executor::LocalPool`]
+    /// Create a new [`RepoBuilder`] which will build a [`Repo`] that spawns it's
+    /// tasks onto a [`futures::executor::LocalPool`]
     pub fn build_localpool(
         spawner: futures::executor::LocalSpawner,
     ) -> RepoBuilder<InMemoryStorage, futures::executor::LocalSpawner, AlwaysAnnounce> {
         builder::RepoBuilder::new(spawner)
+    }
+
+    /// Create a new [`RepoBuilder`] which will build a [`Repo`] that spawns it's
+    /// tasks using wasm-bindgen-futures for WASM environments
+    #[cfg(feature = "wasm")]
+    pub fn build_wasm()
+    -> RepoBuilder<InMemoryStorage, crate::runtime::wasm::WasmRuntime, AlwaysAnnounce> {
+        builder::RepoBuilder::new(crate::runtime::wasm::WasmRuntime::new())
     }
 
     /// Create a new [`Repo`] instance which will build a [`Repo`] that spawns
@@ -633,7 +641,7 @@ impl Repo {
                     .unwrap()
                     .connections
                     .get_mut(&connection_id)
-                    .map(|ConnHandle { rx, .. }| (rx.take()))
+                    .map(|ConnHandle { rx, .. }| rx.take())
                     .expect("connection not found");
                 rx.take().expect("receive end not found")
             };

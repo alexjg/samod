@@ -11,4 +11,6 @@ pub enum ConnFinishedReason {
     ErrorReceiving(String),
     /// There was some error on the network transport when sending data
     ErrorSending(String),
+    /// There was some error configuring a connection
+    Error(String),
 }

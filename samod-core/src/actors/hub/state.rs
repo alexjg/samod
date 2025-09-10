@@ -15,7 +15,7 @@ use crate::{
     network::{
         ConnDirection, ConnectionEvent, ConnectionInfo, ConnectionState, PeerDocState, PeerInfo,
         PeerMetadata,
-        wire_protocol::{WireMessage, WireMessageBuilder},
+        wire_protocol::{PROTOCOL_VERSION, WireMessage, WireMessageBuilder},
     },
 };
 
@@ -579,7 +579,7 @@ impl State {
                     let peer_info = PeerInfo {
                         peer_id: remote_peer_id.clone(),
                         metadata: Some(self.get_local_metadata()),
-                        protocol_version: "1".to_string(),
+                        protocol_version: PROTOCOL_VERSION.to_string(),
                     };
                     out.emit_connection_event(ConnectionEvent::HandshakeCompleted {
                         connection_id,
