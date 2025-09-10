@@ -8,7 +8,7 @@ use futures::{
     executor::LocalPool,
     task::{LocalSpawnExt, SpawnExt},
 };
-use samod::ConnDirection;
+use samod::{ConcurrencyConfig, ConnDirection};
 
 fn init_logging() {
     let _ = tracing_subscriber::fmt()
@@ -30,13 +30,12 @@ fn test_localpool() {
             .spawn_local(async move {
                 let alice = samod::Repo::build_localpool(spawner.clone())
                     .with_peer_id("alice".into())
-                    .with_threadpool(None)
                     .load_local()
                     .await;
 
                 let bob = samod::Repo::build_localpool(spawner.clone())
                     .with_peer_id("bob".into())
-                    .with_threadpool(None)
+                    .with_concurrency(ConcurrencyConfig::AsyncRuntime)
                     .load()
                     .await;
 

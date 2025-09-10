@@ -9,7 +9,7 @@ use samod_core::{
 
 use crate::{
     ActorHandle, Inner, actor_task::ActorTask, announce_policy::LocalAnnouncePolicy,
-    storage::LocalStorage,
+    storage::LocalStorage, unbounded::UnboundedReceiver,
 };
 
 pub(crate) struct IoLoopTask {
@@ -29,7 +29,7 @@ pub(crate) async fn io_loop<S: LocalStorage, A: LocalAnnouncePolicy>(
     inner: Arc<Mutex<Inner>>,
     storage: S,
     announce_policy: A,
-    rx: async_channel::Receiver<IoLoopTask>,
+    rx: UnboundedReceiver<IoLoopTask>,
 ) {
     let mut running_tasks = FuturesUnordered::new();
 
@@ -60,7 +60,7 @@ pub(crate) async fn io_loop<S: LocalStorage, A: LocalAnnouncePolicy>(
                     tracing::warn!(?actor_id, "received io result for unknown actor");
                     continue;
                 };
-                let _ = tx.send_blocking(ActorTask::IoComplete(result));
+                let _ = tx.unbounded_send(ActorTask::IoComplete(result));
             }
         }
     }
@@ -71,7 +71,7 @@ pub(crate) async fn io_loop<S: LocalStorage, A: LocalAnnouncePolicy>(
             tracing::warn!(?actor_id, "received io result for unknown actor");
             continue;
         };
-        let _ = tx.send_blocking(ActorTask::IoComplete(result));
+        let _ = tx.unbounded_send(ActorTask::IoComplete(result));
     }
 }
 
