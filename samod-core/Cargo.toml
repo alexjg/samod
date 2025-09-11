@@ -37,5 +37,5 @@ wasm = ["js-sys", "wasm-bindgen", "web-sys"]
 tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
 samod-test-harness = { path = "../samod-test-harness" }
 
-[target.'cfg(not(taget_arch = "wasm32"))'.dev-dependencies]
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 tokio = { version = "1.0", features = ["macros", "rt-multi-thread"] }

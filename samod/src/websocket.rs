@@ -159,12 +159,24 @@ impl Repo {
         url: &str,
         direction: ConnDirection,
     ) -> ConnFinishedReason {
+        tracing::info!("WASM: Attempting WebSocket connection to {}", url);
+        tracing::debug!("WASM: Connection direction: {:?}", direction);
+
         match WasmWebSocket::connect(url).await {
             Ok(ws) => {
+                tracing::info!(
+                    "WASM: WebSocket connection established, starting protocol handshake"
+                );
                 let (sink, stream) = ws.split();
-                self.connect(stream, sink, direction).await
+                let result = self.connect(stream, sink, direction).await;
+                tracing::info!("WASM: Connection finished with reason: {:?}", result);
+                result
             }
-            Err(e) => ConnFinishedReason::Error(format!("Failed to connect WebSocket: {}", e)),
+            Err(e) => {
+                let error_msg = format!("Failed to connect WebSocket: {}", e);
+                tracing::error!("WASM: {}", error_msg);
+                ConnFinishedReason::Error(error_msg)
+            }
         }
     }
 
