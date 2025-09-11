@@ -17,3 +17,15 @@ impl std::fmt::Display for CommandId {
         write!(f, "{}", self.0)
     }
 }
+
+impl From<CommandId> for u32 {
+    fn from(id: CommandId) -> Self {
+        id.0 as u32
+    }
+}
+
+impl From<u32> for CommandId {
+    fn from(id: u32) -> Self {
+        CommandId(id as usize)
+    }
+}

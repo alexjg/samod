@@ -23,3 +23,15 @@ impl std::fmt::Display for DocumentActorId {
         write!(f, "actor:{}", self.0)
     }
 }
+
+impl From<DocumentActorId> for u32 {
+    fn from(id: DocumentActorId) -> Self {
+        id.0
+    }
+}
+
+impl From<u32> for DocumentActorId {
+    fn from(id: u32) -> Self {
+        DocumentActorId(id)
+    }
+}

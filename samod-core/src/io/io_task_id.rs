@@ -17,3 +17,15 @@ impl From<usize> for IoTaskId {
         IoTaskId(id)
     }
 }
+
+impl From<IoTaskId> for u32 {
+    fn from(id: IoTaskId) -> Self {
+        id.0 as u32
+    }
+}
+
+impl From<u32> for IoTaskId {
+    fn from(id: u32) -> Self {
+        IoTaskId(id as usize)
+    }
+}
