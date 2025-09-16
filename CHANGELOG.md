@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.4.0 - 2025-09-15
+
+### Added
+
+* It is now possible to use `Storage` and `AnnouncePolicy` implementations which
+  can't support `Send` futures. This is enabled by implementing the new
+  `LocalStorage` and `LocalAnnouncePolicy` traits instead of `Storage` and
+  `AnnouncePolicy`. and loading the repo using a `LocalRuntimeHandle` rather
+  than a `RuntimeHandle`.
+
+### Breaking Changes
+
+* Use of a `rayon` threadpool to run document actors is now gated behind the
+  `threadpool` feature flag and the `RepoBuilder::with_concurrency` method.
+* `RuntimeHandle` is now much simpler and only requires a `spawn`function
+* `StorageKey` no longer implements `FromIterator<String>` or
+  `From<Vec<String>>`, use `StorageKey::from_parts` instead
+
 ## 0.3.1 - 2025-08-29
 
 ### Fixed

@@ -14,7 +14,7 @@ use crate::{ConnectionId, DocumentId, network::ConnDirection};
 /// 2. They are assigned unique `CommandId`s and wrapped in `DispatchedCommand`
 /// 3. The command is processed asynchronously by internal futures
 /// 4. Results are returned via `HubResults::completed_commands`
-pub enum Command {
+pub(crate) enum Command {
     /// Creates a new network connection and begins handshake if outgoing.
     ///
     /// This command establishes a new communication channel that can be used
