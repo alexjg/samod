@@ -30,6 +30,10 @@ impl UnixTimestamp {
         }
     }
 
+    pub fn from_millis(millis: u128) -> Self {
+        Self { millis }
+    }
+
     pub fn as_millis(&self) -> u128 {
         self.millis
     }
