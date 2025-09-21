@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-automerge = "0.7.0"
+automerge = { workspace = true }
 rand = "0.9.1"
 samod-core = { path = "../samod-core" }
 tracing = "0.1.41"

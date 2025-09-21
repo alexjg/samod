@@ -2,3 +2,6 @@
 edition = "2024"
 resolver = "3"
 members = [ "samod","samod-core", "samod-test-harness"]
+
+[workspace.dependencies]
+automerge = "0.7.1"
