@@ -30,7 +30,11 @@ impl SamodRef<'_> {
     }
 
     pub fn create_document(&mut self) -> RunningDocIds {
-        self.wrapper().create_document()
+        self.wrapper().create_document(None)
+    }
+
+    pub fn create_document_with_content(&mut self, content: automerge::Automerge) -> RunningDocIds {
+        self.wrapper().create_document(Some(content))
     }
 
     pub fn start_create_document(&mut self) -> CommandId {

@@ -116,8 +116,12 @@ impl SamodWrapper {
         }
     }
 
-    pub fn create_document(&mut self) -> RunningDocIds {
-        let DispatchedCommand { command_id, event } = HubEvent::create_document(Automerge::new());
+    pub fn create_document(
+        &mut self,
+        initial_content: Option<automerge::Automerge>,
+    ) -> RunningDocIds {
+        let initial_content = initial_content.unwrap_or_default();
+        let DispatchedCommand { command_id, event } = HubEvent::create_document(initial_content);
         self.inbox.push_back(event);
         self.handle_events();
         let completed_command = self

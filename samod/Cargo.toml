@@ -15,7 +15,7 @@ gio = ["dep:gio", "dep:glib"]
 threadpool = ["dep:rayon"]
 
 [dependencies]
-automerge = "0.7.0"
+automerge = { workspace = true }
 axum = { version = "0.8.4", optional = true, features = ["ws"] }
 bytes = "1.10.1"
 chrono = "0.4.41"
