@@ -1,4 +1,4 @@
-use automerge::{AutomergeError, ReadDoc, transaction::Transactable};
+use automerge::{AutomergeError, ROOT, ReadDoc, transaction::Transactable};
 use samod_core::network::ConnectionEvent;
 use samod_test_harness::{Network, RunningDocIds};
 
@@ -514,4 +514,47 @@ fn sync_while_requesting() {
         .check_find_document_result(find_command)
         .expect("error running find command")
         .expect("derek should have the doc");
+}
+
+#[test]
+fn create_while_connected() {
+    init_logging();
+    let mut network = Network::new();
+    let alice = network.create_samod("alice");
+    let bob = network.create_samod("bob");
+
+    network.connect(alice, bob);
+
+    network.run_until_quiescent();
+
+    // Create the document on alice
+    let RunningDocIds { doc_id, .. } = network.samod(&alice).create_document();
+
+    // Now modify the document on alice
+    network
+        .samod(&alice)
+        .with_document(&doc_id, |doc| {
+            doc.transact::<_, _, AutomergeError>(|tx| {
+                tx.put(ROOT, "foo", "bar")?;
+                Ok(())
+            })
+            .unwrap();
+        })
+        .unwrap();
+
+    let alice_peer_id = network.samod(&alice).peer_id();
+    let bob_peer_id = network.samod(&bob).peer_id();
+    network
+        .run_until_message_received_at(alice_peer_id, bob_peer_id)
+        .unwrap();
+
+    let find_command = network.samod(&bob).begin_find_document(&doc_id);
+
+    network.run_until_quiescent();
+
+    let _ = network
+        .samod(&bob)
+        .check_find_document_result(find_command)
+        .expect("error running find command")
+        .expect("bob should have the doc");
 }
