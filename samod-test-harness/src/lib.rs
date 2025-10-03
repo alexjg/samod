@@ -1,7 +1,7 @@
 use std::collections::{HashMap, VecDeque};
 
 use samod_core::{
-    ConnectionId, StorageKey,
+    ConnectionId, PeerId, StorageKey,
     actors::hub::{DispatchedCommand, HubEvent},
 };
 
@@ -163,6 +163,71 @@ impl Network {
                 } else {
                     panic!("Target Samod not found: {target_samod_id:?}");
                 }
+            }
+        }
+    }
+
+    pub fn run_until_message_received_at(
+        &mut self,
+        sender: PeerId,
+        recipient: PeerId,
+    ) -> Result<(), String> {
+        let mut seen = false;
+        loop {
+            let mut msgs_this_round: HashMap<SamodId, VecDeque<HubEvent>> = HashMap::new();
+            let samods_to_peer_ids = self
+                .samods
+                .iter()
+                .map(|(id, s)| (*id, s.peer_id()))
+                .collect::<HashMap<SamodId, PeerId>>();
+
+            // For each samod, handle it's events
+            for samod in self.samods.values_mut() {
+                let peer_id = samod.peer_id();
+                samod.handle_events();
+
+                for (connection_id, msgs) in samod.outbox.drain() {
+                    if let Some(connection) = self.connections.iter().find(|c| {
+                        c.left_connection == connection_id || c.right_connection == connection_id
+                    }) {
+                        let (target_samod_id, target_connection_id) =
+                            if connection.left_connection == connection_id {
+                                (connection.right_samod, connection.right_connection)
+                            } else {
+                                (connection.left_samod, connection.left_connection)
+                            };
+
+                        for msg in msgs {
+                            let DispatchedCommand { event, .. } =
+                                HubEvent::receive(target_connection_id, msg);
+                            msgs_this_round
+                                .entry(target_samod_id)
+                                .or_default()
+                                .push_back(event);
+                            if let Some(target_peer_id) = samods_to_peer_ids.get(&target_samod_id)
+                                && sender == peer_id && *target_peer_id == recipient {
+                                    seen = true;
+                                }
+                        }
+                    }
+                }
+            }
+            let quiet = msgs_this_round.values().all(|m| m.is_empty());
+            if quiet {
+                return Err(format!(
+                    "no messages received from {} for {}",
+                    sender, recipient
+                ));
+            }
+            for (target_samod_id, events) in msgs_this_round {
+                if let Some(samod) = self.samods.get_mut(&target_samod_id) {
+                    samod.inbox.extend(events);
+                } else {
+                    panic!("Target Samod not found: {target_samod_id:?}");
+                }
+            }
+            if seen {
+                return Ok(());
             }
         }
     }
