@@ -633,7 +633,7 @@ impl Repo {
                     .unwrap()
                     .connections
                     .get_mut(&connection_id)
-                    .map(|ConnHandle { rx, .. }| (rx.take()))
+                    .map(|ConnHandle { rx, .. }| rx.take())
                     .expect("connection not found");
                 rx.take().expect("receive end not found")
             };
