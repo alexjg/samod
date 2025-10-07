@@ -614,15 +614,16 @@ impl Repo {
     where
         SendErr: std::error::Error + Send + Sync + 'static,
         RecvErr: std::error::Error + Send + Sync + 'static,
-        Snk: Sink<Vec<u8>, Error = SendErr> + Send + 'static + Unpin,
-        Str: Stream<Item = Result<Vec<u8>, RecvErr>> + Send + 'static + Unpin,
+        Snk: Sink<Vec<u8>, Error = SendErr> + 'static + Unpin,
+        Str: Stream<Item = Result<Vec<u8>, RecvErr>> + 'static + Unpin,
     {
         let local_peer_id = self.inner.lock().unwrap().hub.peer_id();
-        tracing::info!("Creating connection with direction {:?}, local peer: {}", direction, local_peer_id);
-        tracing::Span::current().record(
-            "local_peer_id",
-            local_peer_id.to_string(),
+        tracing::info!(
+            "Creating connection with direction {:?}, local peer: {}",
+            direction,
+            local_peer_id
         );
+        tracing::Span::current().record("local_peer_id", local_peer_id.to_string());
         let DispatchedCommand { command_id, event } = HubEvent::create_connection(direction);
         tracing::debug!("Created connection command_id: {:?}", command_id);
         let (tx, rx) = oneshot::channel();
@@ -654,7 +655,10 @@ impl Repo {
             };
 
             let mut stream = stream.fuse();
-            tracing::info!("Starting connection message loop for connection {:?}", connection_id);
+            tracing::info!(
+                "Starting connection message loop for connection {:?}",
+                connection_id
+            );
             let result = loop {
                 futures::select! {
                     next_inbound_msg = stream.next() => {
@@ -701,6 +705,42 @@ impl Repo {
         }
     }
 
+    #[cfg(feature = "wasm")]
+    /// Connect with an additional ready signal for controlled connection
+    pub fn connect_with_ready_signal<Str, Snk, SendErr, RecvErr>(
+        &self,
+        stream: Str,
+        sink: Snk,
+        direction: ConnDirection,
+        ready_signal: oneshot::Sender<()>,
+    ) -> impl Future<Output = ConnFinishedReason> + 'static
+    where
+        SendErr: std::error::Error + Send + Sync + 'static,
+        RecvErr: std::error::Error + Send + Sync + 'static,
+        Snk: Sink<Vec<u8>, Error = SendErr> + 'static + Unpin,
+        Str: Stream<Item = Result<Vec<u8>, RecvErr>> + 'static + Unpin,
+    {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let ready_sent = Arc::new(AtomicBool::new(false));
+        let ready_sent_clone = Arc::clone(&ready_sent);
+        let mut ready_signal = Some(ready_signal);
+
+        let monitoring_sink = sink.with(move |msg| {
+            if !ready_sent_clone.load(Ordering::Relaxed) {
+                ready_sent_clone.store(true, Ordering::Relaxed);
+                if let Some(signal) = ready_signal.take() {
+                    let _ = signal.send(());
+                }
+                tracing::info!("WASM: Protocol handshake complete (first message sent)");
+            }
+            futures::future::ready(Ok::<Vec<u8>, SendErr>(msg))
+        });
+
+        self.connect(stream, monitoring_sink, direction)
+    }
+
     /// Connect with an additional close signal for controlled disconnection
     pub async fn connect_with_close_signal<Str, Snk, SendErr, RecvErr, CloseFuture>(
         &self,
@@ -730,13 +770,9 @@ impl Repo {
         self.inner.lock().unwrap().handle_event(event);
 
         let inner = self.inner.clone();
-        
+
         let connection_id = match rx.await {
-            Ok(CommandResult::CreateConnection { connection_id }) => {
-                #[cfg(target_arch = "wasm32")]
-                web_sys::console::log_1(&format!("WASM: Got connection_id: {:?}", connection_id).into());
-                connection_id
-            },
+            Ok(CommandResult::CreateConnection { connection_id }) => connection_id,
             Ok(other) => panic!("unexpected command result for create connection: {other:?}"),
             Err(_) => return ConnFinishedReason::Shutdown,
         };
@@ -754,12 +790,21 @@ impl Repo {
 
         let mut stream = stream.fuse();
         let mut close_signal = close_signal.fuse();
-        
-        tracing::info!("Starting connection message loop for connection {:?}", connection_id);
-        
+
+        tracing::info!(
+            "Starting connection message loop for connection {:?}",
+            connection_id
+        );
+
         #[cfg(target_arch = "wasm32")]
-        web_sys::console::log_1(&format!("WASM: Starting connection message loop for connection {:?}", connection_id).into());
-        
+        web_sys::console::log_1(
+            &format!(
+                "WASM: Starting connection message loop for connection {:?}",
+                connection_id
+            )
+            .into(),
+        );
+
         let result = loop {
             futures::select! {
                 _ = close_signal => {
@@ -848,7 +893,7 @@ impl Repo {
     }
 
     /// List all document IDs that are stored locally
-    /// 
+    ///
     /// This method returns document IDs of all currently active document handles.
     /// For now, this implementation returns the document IDs of documents that are
     /// currently loaded in memory. A future enhancement could scan storage for

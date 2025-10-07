@@ -1,7 +1,9 @@
 use futures::{Future, Sink, SinkExt, Stream, StreamExt};
-
 #[cfg(feature = "wasm")]
-use futures::channel::{mpsc, oneshot};
+use futures::{
+    FutureExt,
+    channel::{mpsc, oneshot},
+};
 #[cfg(feature = "wasm")]
 use js_sys::Uint8Array;
 #[cfg(feature = "wasm")]
@@ -14,6 +16,16 @@ use wasm_bindgen::{JsCast, prelude::Closure};
 use web_sys::{CloseEvent, ErrorEvent, MessageEvent, WebSocket};
 
 use crate::{ConnDirection, ConnFinishedReason, Repo};
+
+#[cfg(feature = "wasm")]
+use futures::future::LocalBoxFuture;
+
+#[cfg(feature = "wasm")]
+pub struct WasmConnectionEvents {
+    pub on_open: oneshot::Receiver<()>,
+    pub on_ready: oneshot::Receiver<()>,
+    pub finished: LocalBoxFuture<'static, ConnFinishedReason>,
+}
 
 /// A copy of tungstenite::Message
 ///
@@ -180,6 +192,51 @@ impl Repo {
         }
     }
 
+    #[cfg(feature = "wasm")]
+    pub fn connect_wasm_websocket_observable(
+        &self,
+        url: &str,
+        direction: ConnDirection,
+    ) -> WasmConnectionEvents {
+        let (open_tx, open_rx) = oneshot::channel();
+        let (ready_tx, ready_rx) = oneshot::channel();
+
+        let repo = self.clone();
+        let url = url.to_string();
+
+        let finished = async move {
+            tracing::info!("WASM: Attempting WebSocket connection to {}", url);
+
+            match WasmWebSocket::connect(&url).await {
+                Ok(ws) => {
+                    tracing::info!("WASM: WebSocket connection established");
+                    let _ = open_tx.send(());
+
+                    let (sink, stream) = ws.split();
+
+                    let result = repo
+                        .connect_with_ready_signal(stream, sink, direction, ready_tx)
+                        .await;
+
+                    tracing::info!("WASM: Connection finished with reason: {:?}", result);
+                    result
+                }
+                Err(e) => {
+                    let error_msg = format!("Failed to connect WebSocket: {}", e);
+                    tracing::error!("WASM: {}", error_msg);
+                    ConnFinishedReason::Error(error_msg)
+                }
+            }
+        }
+        .boxed_local();
+
+        WasmConnectionEvents {
+            on_open: open_rx,
+            on_ready: ready_rx,
+            finished,
+        }
+    }
+
     /// Connect any stream of [`WsMessage`]s
     ///
     /// [`WsMessage`] is a copy of `tungstenite::Message` and
@@ -194,8 +251,8 @@ impl Repo {
         direction: ConnDirection,
     ) -> impl Future<Output = ConnFinishedReason> + 'static
     where
-        M: Into<WsMessage> + From<WsMessage> + Send + 'static,
-        S: Sink<M, Error = NetworkError> + Stream<Item = Result<M, NetworkError>> + Send + 'static,
+        M: Into<WsMessage> + From<WsMessage> + 'static,
+        S: Sink<M, Error = NetworkError> + Stream<Item = Result<M, NetworkError>> + 'static,
     {
         let (sink, stream) = stream.split();
 
@@ -223,7 +280,7 @@ impl Repo {
                     }
                 }
             })
-            .boxed();
+            .boxed_local();
 
         let msg_sink = sink
             .sink_map_err(|e| NetworkError(format!("websocket send error: {e}")))
