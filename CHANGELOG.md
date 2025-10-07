@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.5.0 - 2025-10-03
+
+### Changed
+
+* `AutomergeUrl` is now clone (thanks to @pkgw)
+
+### Breaking Changes
+
+* Updated to `automerge` 0.7.0
+
 ## 0.4.0 - 2025-09-15
 
 ### Added

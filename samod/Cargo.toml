@@ -1,6 +1,6 @@
 [package]
 name = "samod"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2024"
 authors = ["Alex Good <alex@patternist.xyz>"]
 description = "A rust library for managing automerge documents, compatible with the js automerge-repo library"
@@ -16,14 +16,14 @@ threadpool = ["dep:rayon"]
 wasm = ["dep:wasm-bindgen", "dep:wasm-bindgen-futures", "dep:js-sys", "dep:web-sys", "samod-core/wasm"]
 
 [dependencies]
-automerge = "0.6.1"
+automerge = "0.7.0"
 axum = { version = "0.8.4", optional = true, features = ["ws"] }
 bytes = "1.10.1"
 chrono = "0.4.41"
 futures = "0.3.31"
 rand = "0.9.1"
 rayon = { version = "1.10.0", optional = true }
-samod-core = { path = "../samod-core", version = "0.4.0" }
+samod-core = { path = "../samod-core", version = "0.5.0" }
 tokio = { version = "1.46.0", features = ["rt", "time"], optional = true }
 tracing = "0.1.41"
 tungstenite = { version = "0.27.0", optional = true }
@@ -33,7 +33,7 @@ async-channel = "2.5.0"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 rayon = { version = "1.10.0", optional = true }
-samod-core = { path = "../samod-core", version = "0.4.0" }
+samod-core = { path = "../samod-core", version = "0.5.0" }
 tokio = { version = "1.46.0", features = ["rt", "time", "fs"], optional = true }
 tokio-tungstenite = { version = "0.27.0", optional = true }
 tokio-util = { version = "0.7.15", features = [

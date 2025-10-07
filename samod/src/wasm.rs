@@ -561,20 +561,23 @@ fn automerge_obj_to_js_value(
 
             // Get all properties from the map object
             for item in doc.map_range(&obj, ..) {
-                let prop = item.key;
-                let value = item.value;
-
-                let js_value = match &value {
-                    automerge::Value::Object(_) => {
+                match item.value {
+                    automerge::ValueRef::Object(_) => {
                         // For object values, we need to handle them using the object ID
                         // which is available in the item context
-                        automerge_obj_to_js_value(doc, item.id)?
+                        let obj_id = item.id();
+                        let prop = item.key;
+                        let result = automerge_obj_to_js_value(doc, obj_id)?;
+                        js_sys::Reflect::set(&js_obj, &JsValue::from_str(&prop), &result)
+                            .map_err(|_| automerge::AutomergeError::InvalidOp(ObjType::Map))?;
                     }
-                    _ => automerge_value_to_js_value(doc, &value)?,
+                    value => {
+                        let prop = item.key;
+                        let result = automerge_value_to_js_value(doc, value.into())?;
+                        js_sys::Reflect::set(&js_obj, &JsValue::from_str(&prop), &result)
+                            .map_err(|_| automerge::AutomergeError::InvalidOp(ObjType::Map))?;
+                    }
                 };
-
-                js_sys::Reflect::set(&js_obj, &JsValue::from_str(prop), &js_value)
-                    .map_err(|_| automerge::AutomergeError::InvalidOp(ObjType::Map))?;
             }
 
             Ok(js_obj.into())
@@ -586,7 +589,7 @@ fn automerge_obj_to_js_value(
             // Get all items from the list object
             for i in 0..len {
                 if let Ok(Some((value, _))) = doc.get(&obj, i) {
-                    let js_value = automerge_value_to_js_value(doc, &value)?;
+                    let js_value = automerge_value_to_js_value(doc, value)?;
                     js_array.push(&js_value);
                 }
             }
@@ -604,16 +607,21 @@ fn automerge_obj_to_js_value(
 
             // Get all properties from the table object
             for item in doc.map_range(&obj, ..) {
-                let prop = item.key;
-                let value = item.value;
-
-                let js_value = match &value {
-                    automerge::Value::Object(_) => automerge_obj_to_js_value(doc, item.id)?,
-                    _ => automerge_value_to_js_value(doc, &value)?,
+                match item.value {
+                    automerge::ValueRef::Object(_) => {
+                        let obj_id = item.id();
+                        let prop = item.key;
+                        let result = automerge_obj_to_js_value(doc, obj_id)?;
+                        js_sys::Reflect::set(&js_obj, &JsValue::from_str(&prop), &result)
+                            .map_err(|_| automerge::AutomergeError::InvalidOp(ObjType::Table))?;
+                    }
+                    value => {
+                        let prop = item.key;
+                        let result = automerge_value_to_js_value(doc, value.into())?;
+                        js_sys::Reflect::set(&js_obj, &JsValue::from_str(&prop), &result)
+                            .map_err(|_| automerge::AutomergeError::InvalidOp(ObjType::Table))?;
+                    }
                 };
-
-                js_sys::Reflect::set(&js_obj, &JsValue::from_str(prop), &js_value)
-                    .map_err(|_| automerge::AutomergeError::InvalidOp(ObjType::Table))?;
             }
 
             Ok(js_obj.into())
@@ -624,32 +632,23 @@ fn automerge_obj_to_js_value(
 /// Helper function to convert an Automerge value to a JavaScript value
 fn automerge_value_to_js_value(
     _doc: &Automerge,
-    value: &automerge::Value,
+    value: automerge::Value<'_>,
 ) -> Result<JsValue, automerge::AutomergeError> {
     use automerge::Value;
 
     match value {
         Value::Scalar(scalar_value) => match scalar_value.as_ref() {
-            automerge::ScalarValue::Str(s) => Ok(JsValue::from_str(s)),
-            automerge::ScalarValue::Int(i) => {
-                // Convert i64 to f64 to avoid BigInt in JavaScript
-                Ok(JsValue::from(*i as f64))
-            }
-            automerge::ScalarValue::Uint(u) => {
-                // Convert u64 to f64 to avoid BigInt in JavaScript
-                Ok(JsValue::from(*u as f64))
-            }
+            automerge::ScalarValue::Str(s) => Ok(JsValue::from_str(s.as_str())),
+            automerge::ScalarValue::Int(i) => Ok(JsValue::from(*i as f64)),
+            automerge::ScalarValue::Uint(u) => Ok(JsValue::from(*u as f64)),
             automerge::ScalarValue::F64(f) => Ok(JsValue::from(*f)),
             automerge::ScalarValue::Boolean(b) => Ok(JsValue::from(*b)),
             automerge::ScalarValue::Bytes(bytes) => Ok(js_sys::Uint8Array::from(&bytes[..]).into()),
             automerge::ScalarValue::Null => Ok(JsValue::NULL),
-            automerge::ScalarValue::Timestamp(t) => {
-                // Convert timestamp to f64 to avoid BigInt
-                Ok(JsValue::from(*t as f64))
-            }
+            automerge::ScalarValue::Timestamp(t) => Ok(JsValue::from(*t as f64)),
             automerge::ScalarValue::Counter(c) => Ok(JsValue::from(format!("{}", c))),
             _ => Ok(JsValue::UNDEFINED),
         },
-        Value::Object(obj_type) => Err(automerge::AutomergeError::InvalidOp(*obj_type)),
+        Value::Object(obj_type) => Err(automerge::AutomergeError::InvalidOp(obj_type.to_owned())),
     }
 }
