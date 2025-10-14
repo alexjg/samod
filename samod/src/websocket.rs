@@ -245,6 +245,7 @@ impl Repo {
     /// are identical, but not the same type. This function allows us to
     /// implement the connection logic once and use it for both `tungstenite`
     /// and `axum`.
+    #[cfg(target_arch = "wasm32")]
     pub fn connect_websocket<S, M>(
         &self,
         stream: S,
@@ -281,6 +282,61 @@ impl Repo {
                 }
             })
             .boxed_local();
+
+        let msg_sink = sink
+            .sink_map_err(|e| NetworkError(format!("websocket send error: {e}")))
+            .with(|msg| {
+                futures::future::ready(Ok::<_, NetworkError>(WsMessage::Binary(msg).into()))
+            });
+
+        self.connect(msg_stream, msg_sink, direction)
+    }
+
+    /// Connect any stream of [`WsMessage`]s
+    ///
+    /// [`WsMessage`] is a copy of `tungstenite::Message` and
+    /// `axum::extract::ws::Message` which is reimplemented in this crate
+    /// because both `tungstenite` and `axum` use their own message types which
+    /// are identical, but not the same type. This function allows us to
+    /// implement the connection logic once and use it for both `tungstenite`
+    /// and `axum`.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn connect_websocket<S, M>(
+        &self,
+        stream: S,
+        direction: ConnDirection,
+    ) -> impl Future<Output = ConnFinishedReason> + 'static
+    where
+        M: Into<WsMessage> + From<WsMessage> + Send + 'static,
+        S: Sink<M, Error = NetworkError> + Stream<Item = Result<M, NetworkError>> + Send + 'static,
+    {
+        let (sink, stream) = stream.split();
+
+        let msg_stream = stream
+            .filter_map::<_, Result<Vec<u8>, NetworkError>, _>({
+                move |msg| async move {
+                    let msg = match msg {
+                        Ok(m) => m,
+                        Err(e) => {
+                            return Some(Err(NetworkError(format!(
+                                "websocket receive error: {e}"
+                            ))));
+                        }
+                    };
+                    match msg.into() {
+                        WsMessage::Binary(data) => Some(Ok(data)),
+                        WsMessage::Close => {
+                            tracing::debug!("websocket closing");
+                            None
+                        }
+                        WsMessage::Ping(_) | WsMessage::Pong(_) => None,
+                        WsMessage::Text(_) => Some(Err(NetworkError(
+                            "unexpected string message on websocket".to_string(),
+                        ))),
+                    }
+                }
+            })
+            .boxed();
 
         let msg_sink = sink
             .sink_map_err(|e| NetworkError(format!("websocket send error: {e}")))
