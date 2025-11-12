@@ -10,6 +10,12 @@ pub struct AutomergeUrl {
     path: Option<Vec<am::Prop>>,
 }
 
+impl AutomergeUrl {
+    pub fn document_id(&self) -> &DocumentId {
+        &self.document_id
+    }
+}
+
 impl From<&DocumentId> for AutomergeUrl {
     fn from(id: &DocumentId) -> Self {
         AutomergeUrl {
