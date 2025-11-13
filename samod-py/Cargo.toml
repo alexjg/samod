@@ -1,0 +1,26 @@
+[package]
+name = "samod-py"
+version = "0.5.0"
+edition = "2024"
+authors = ["Alex Good <alex@patternist.xyz>", "Kyle Kelley <rgbkrk@gmail.com>"]
+description = "Python bindings for samod"
+license = "MIT"
+repository = "https://github.com/alexjg/samod"
+
+[lib]
+name = "samod_py"
+crate-type = ["cdylib"]
+
+[dependencies]
+samod = { path = "../samod", features = ["tokio", "tungstenite"] }
+samod-core = { path = "../samod-core" }
+automerge = "0.7.0"
+pyo3 = { version = "0.24", features = ["extension-module", "abi3-py38", "anyhow"] }
+pyo3-async-runtimes = { version = "0.24", features = ["tokio-runtime"] }
+tokio = { version = "1.46.0", features = ["rt-multi-thread", "macros", "time"] }
+tokio-tungstenite = { version = "0.27.0", features = ["rustls-tls-native-roots"] }
+rustls = { version = "0.23", features = ["aws-lc-rs"] }
+futures = "0.3.31"
+anyhow = "1.0"
+tracing = "0.1.41"
+serde_json = "1.0"
