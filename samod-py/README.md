@@ -32,7 +32,7 @@ async def main():
     print(f"Title: {title}")
 
     url = await doc.url()
-    print(f"Autommerge URL: {doc_id}")
+    print(f"Automerge URL: {url}")
 
     # Find an existing document
     existing = await repo.find("automerge:...")
