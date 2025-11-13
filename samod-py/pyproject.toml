@@ -5,13 +5,35 @@ build-backend = "maturin"
 [project]
 name = "samod"
 version = "0.5.0a1"
-description = "Python bindings for samod"
+description = "Python bindings for samod - Rust implementation of automerge-repo"
+readme = "README.md"
 requires-python = ">=3.8"
+license = { text = "MIT" }
+authors = [
+    { name = "Alex Good", email = "alex@patternist.xyz" },
+    { name = "Kyle Kelley", email = "rgbkrk@gmail.com" },
+]
+keywords = ["automerge", "crdt", "sync", "collaboration", "distributed"]
 classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
     "Programming Language :: Rust",
     "Programming Language :: Python :: Implementation :: CPython",
     "Programming Language :: Python :: Implementation :: PyPy",
+    "Topic :: Software Development :: Libraries",
 ]
+
+[project.urls]
+Homepage = "https://github.com/alexjg/samod"
+Repository = "https://github.com/alexjg/samod"
+Documentation = "https://github.com/alexjg/samod/tree/main/samod-py"
 
 [tool.maturin]
 features = ["pyo3/extension-module"]
