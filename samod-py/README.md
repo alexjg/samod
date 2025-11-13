@@ -31,8 +31,8 @@ async def main():
     title = await doc.get_string("title")
     print(f"Title: {title}")
 
-    doc_id = await doc.document_id()
-    print(f"Document ID: {doc_id}")
+    url = await doc.url()
+    print(f"Autommerge URL: {doc_id}")
 
     # Find an existing document
     existing = await repo.find("automerge:...")
