@@ -1,4 +1,4 @@
-# samod-py
+# samod
 
 Python bindings for Automerge via [samod](https://github.com/alexjg/samod).
 
