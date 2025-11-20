@@ -1,6 +1,6 @@
 use crate::ConnectionId;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum HubIoAction {
     Send {
         connection_id: ConnectionId,

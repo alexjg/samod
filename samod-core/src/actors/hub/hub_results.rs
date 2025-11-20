@@ -27,7 +27,7 @@ use super::io::HubIoAction;
 /// 1. Execute all tasks in `new_tasks`
 /// 2. Check `completed_commands` for any commands they were tracking
 /// 3. Notify the system of IO completion via `Event::io_complete`
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct HubResults {
     /// IO tasks that must be executed by the calling application.
     ///
