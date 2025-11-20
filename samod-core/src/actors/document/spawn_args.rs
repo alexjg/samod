@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use crate::{ConnectionId, DocumentActorId, PeerId, actors::messages::DocMessage};
 
+#[derive(Clone)]
 pub struct SpawnArgs {
     pub(crate) local_peer_id: PeerId,
     pub(crate) actor_id: DocumentActorId,

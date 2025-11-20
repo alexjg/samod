@@ -1,4 +1,3 @@
-use minicbor::{Decode, Encode};
 use std::sync::atomic::{AtomicU32, Ordering};
 
 static LAST_CONNECTION_ID: AtomicU32 = AtomicU32::new(0);

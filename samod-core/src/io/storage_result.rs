@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use crate::StorageKey;
 
 // The inverse of `IoAction`
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum StorageResult {
     Load {
         value: Option<Vec<u8>>,
