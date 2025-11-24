@@ -215,3 +215,6 @@ pub use unix_timestamp::UnixTimestamp;
 
 mod loader;
 pub use loader::{LoaderState, SamodLoader};
+
+#[cfg(feature = "wasm")]
+pub mod time_provider;

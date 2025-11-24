@@ -1,0 +1,6 @@
+# Configuration for wasm32-unknown-unknown target (browsers, wasm-pack)
+[target.wasm32-unknown-unknown]
+rustflags = ['--cfg', 'getrandom_backend="wasm_js"', '-C', 'target-feature=+bulk-memory,+mutable-globals']
+
+[unstable]
+build-std = ["panic_abort", "std"]

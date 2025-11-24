@@ -7,7 +7,7 @@ use crate::{
 };
 
 /// Result of processing a message or I/O completion.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct DocActorResult {
     /// Document I/O tasks that need to be executed by the caller.
     pub io_tasks: Vec<IoTask<DocumentIoTask>>,
@@ -24,13 +24,7 @@ pub struct DocActorResult {
 impl DocActorResult {
     /// Creates an empty result.
     pub fn new() -> Self {
-        Self {
-            io_tasks: Vec::new(),
-            outgoing_messages: Vec::new(),
-            ephemeral_messages: Vec::new(),
-            change_events: Vec::new(),
-            stopped: false,
-        }
+        Self::default()
     }
 
     pub(crate) fn emit_ephemeral_message(&mut self, msg: Vec<u8>) {
@@ -63,11 +57,5 @@ impl DocActorResult {
         let task_id = io_task.task_id;
         self.io_tasks.push(io_task);
         task_id
-    }
-}
-
-impl Default for DocActorResult {
-    fn default() -> Self {
-        Self::new()
     }
 }

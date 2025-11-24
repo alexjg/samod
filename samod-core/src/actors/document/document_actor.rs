@@ -147,8 +147,8 @@ impl DocumentActor {
         &self.document_id
     }
 
-    fn local_peer_id(&self) -> PeerId {
-        self.local_peer_id.clone()
+    fn local_peer_id(&self) -> &PeerId {
+        &self.local_peer_id
     }
 
     /// Provides mutable access to the document with automatic side effect handling.

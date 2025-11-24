@@ -1,0 +1,34 @@
+{
+  "name": "samod-wasm-tests",
+  "version": "1.0.0",
+  "description": "Browser tests for samod WASM build",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "build-wasm": "cd .. && ./scripts/build-wasm.sh --features wasm --typescript",
+    "test": "playwright test",
+    "test:ui": "playwright test --ui",
+    "test:debug": "playwright test --debug",
+    "test:headed": "playwright test --headed",
+    "test:all": "npm run build-wasm && npm run test",
+    "serve": "vite",
+    "preview": "vite preview",
+    "server": "node ../samod/interop-test-server/server.js --wasm",
+    "server:start": "node ../samod/interop-test-server/server.js --wasm &",
+    "server:stop": "pkill -f 'interop-test-server/server.js --wasm' || true",
+    "test:with-server": "npm run server:stop && npm run server:start && sleep 2 && npm run test; npm run server:stop"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.48.0",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0",
+    "vite": "^5.4.0"
+  },
+  "dependencies": {
+    "@automerge/automerge": "^2.2.9",
+    "@automerge/automerge-repo": "^2.0.7",
+    "@automerge/automerge-repo-network-websocket": "^2.0.7",
+    "@automerge/automerge-repo-storage-indexeddb": "^2.0.7"
+  }
+}

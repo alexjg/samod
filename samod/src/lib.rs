@@ -349,6 +349,9 @@ pub mod runtime;
 mod unbounded;
 pub mod websocket;
 
+#[cfg(feature = "wasm")]
+pub mod wasm;
+
 /// The entry point to this library
 ///
 /// A [`Repo`] represents a set of running [`DocHandle`]s, active connections to
@@ -379,8 +382,8 @@ pub struct Repo {
 }
 
 impl Repo {
-    // Create a new [`RepoBuilder`] which will build a [`Repo`] that spawns its
-    // tasks onto the provided runtime
+    /// Create a new [`RepoBuilder`] which will build a [`Repo`] that spawns its
+    /// tasks onto the provided runtime
     pub fn builder<R: runtime::RuntimeHandle>(
         runtime: R,
     ) -> RepoBuilder<InMemoryStorage, R, AlwaysAnnounce> {
@@ -397,12 +400,20 @@ impl Repo {
         builder::RepoBuilder::new(::tokio::runtime::Handle::current())
     }
 
-    // Create a new [`RepoBuilder`] which will build a [`Repo`] that spawns it's
-    // tasks onto a [`futures::executor::LocalPool`]
+    /// Create a new [`RepoBuilder`] which will build a [`Repo`] that spawns it's
+    /// tasks onto a [`futures::executor::LocalPool`]
     pub fn build_localpool(
         spawner: futures::executor::LocalSpawner,
     ) -> RepoBuilder<InMemoryStorage, futures::executor::LocalSpawner, AlwaysAnnounce> {
         builder::RepoBuilder::new(spawner)
+    }
+
+    /// Create a new [`RepoBuilder`] which will build a [`Repo`] that spawns it's
+    /// tasks using wasm-bindgen-futures for WASM environments
+    #[cfg(feature = "wasm")]
+    pub fn build_wasm()
+    -> RepoBuilder<InMemoryStorage, crate::runtime::wasm::WasmRuntime, AlwaysAnnounce> {
+        builder::RepoBuilder::new(crate::runtime::wasm::WasmRuntime::new())
     }
 
     /// Create a new [`Repo`] instance which will build a [`Repo`] that spawns
@@ -603,14 +614,18 @@ impl Repo {
     where
         SendErr: std::error::Error + Send + Sync + 'static,
         RecvErr: std::error::Error + Send + Sync + 'static,
-        Snk: Sink<Vec<u8>, Error = SendErr> + Send + 'static + Unpin,
-        Str: Stream<Item = Result<Vec<u8>, RecvErr>> + Send + 'static + Unpin,
+        Snk: Sink<Vec<u8>, Error = SendErr> + 'static + Unpin,
+        Str: Stream<Item = Result<Vec<u8>, RecvErr>> + 'static + Unpin,
     {
-        tracing::Span::current().record(
-            "local_peer_id",
-            self.inner.lock().unwrap().hub.peer_id().to_string(),
+        let local_peer_id = self.inner.lock().unwrap().hub.peer_id();
+        tracing::info!(
+            "Creating connection with direction {:?}, local peer: {}",
+            direction,
+            local_peer_id
         );
+        tracing::Span::current().record("local_peer_id", local_peer_id.to_string());
         let DispatchedCommand { command_id, event } = HubEvent::create_connection(direction);
+        tracing::debug!("Created connection command_id: {:?}", command_id);
         let (tx, rx) = oneshot::channel();
         self.inner
             .lock()
@@ -618,6 +633,7 @@ impl Repo {
             .pending_commands
             .insert(command_id, tx);
         self.inner.lock().unwrap().handle_event(event);
+        tracing::debug!("Handled create_connection event");
 
         let inner = self.inner.clone();
         async move {
@@ -639,12 +655,17 @@ impl Repo {
             };
 
             let mut stream = stream.fuse();
+            tracing::info!(
+                "Starting connection message loop for connection {:?}",
+                connection_id
+            );
             let result = loop {
                 futures::select! {
                     next_inbound_msg = stream.next() => {
                         if let Some(msg) = next_inbound_msg {
                             match msg {
                                 Ok(msg) => {
+                                    tracing::debug!("Received {} bytes from stream", msg.len());
                                     let DispatchedCommand { event, .. } = HubEvent::receive(connection_id, msg);
                                     inner.lock().unwrap().handle_event(event);
                                 }
@@ -660,6 +681,7 @@ impl Repo {
                     },
                     next_outbound = rx.next() => {
                         if let Some(next_outbound) = next_outbound {
+                            tracing::debug!("Sending {} bytes to stream", next_outbound.len());
                             if let Err(e) = sink.send(next_outbound).await {
                                 tracing::error!(err=?e, "error sending, closing connection");
                                 break ConnFinishedReason::ErrorSending(e.to_string());
@@ -671,6 +693,7 @@ impl Repo {
                     }
                 }
             };
+            tracing::info!("Connection message loop ended with result: {:?}", result);
             if !(result == ConnFinishedReason::WeDisconnected) {
                 let event = HubEvent::connection_lost(connection_id);
                 inner.lock().unwrap().handle_event(event);
@@ -680,6 +703,160 @@ impl Repo {
             }
             result
         }
+    }
+
+    #[cfg(feature = "wasm")]
+    /// Connect with an additional ready signal for controlled connection
+    pub fn connect_with_ready_signal<Str, Snk, SendErr, RecvErr>(
+        &self,
+        stream: Str,
+        sink: Snk,
+        direction: ConnDirection,
+        ready_signal: oneshot::Sender<()>,
+    ) -> impl Future<Output = ConnFinishedReason> + 'static
+    where
+        SendErr: std::error::Error + Send + Sync + 'static,
+        RecvErr: std::error::Error + Send + Sync + 'static,
+        Snk: Sink<Vec<u8>, Error = SendErr> + 'static + Unpin,
+        Str: Stream<Item = Result<Vec<u8>, RecvErr>> + 'static + Unpin,
+    {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let ready_sent = Arc::new(AtomicBool::new(false));
+        let ready_sent_clone = Arc::clone(&ready_sent);
+        let mut ready_signal = Some(ready_signal);
+
+        let monitoring_sink = sink.with(move |msg| {
+            if !ready_sent_clone.load(Ordering::Relaxed) {
+                ready_sent_clone.store(true, Ordering::Relaxed);
+                if let Some(signal) = ready_signal.take() {
+                    let _ = signal.send(());
+                }
+                tracing::info!("WASM: Protocol handshake complete (first message sent)");
+            }
+            futures::future::ready(Ok::<Vec<u8>, SendErr>(msg))
+        });
+
+        self.connect(stream, monitoring_sink, direction)
+    }
+
+    /// Connect with an additional close signal for controlled disconnection
+    pub async fn connect_with_close_signal<Str, Snk, SendErr, RecvErr, CloseFuture>(
+        &self,
+        stream: Str,
+        mut sink: Snk,
+        direction: ConnDirection,
+        close_signal: CloseFuture,
+    ) -> ConnFinishedReason
+    where
+        SendErr: std::error::Error + Send + Sync + 'static,
+        RecvErr: std::error::Error + Send + Sync + 'static,
+        Snk: Sink<Vec<u8>, Error = SendErr> + Send + 'static + Unpin,
+        Str: Stream<Item = Result<Vec<u8>, RecvErr>> + Send + 'static + Unpin,
+        CloseFuture: Future<Output = Result<(), oneshot::Canceled>> + Unpin,
+    {
+        tracing::Span::current().record(
+            "local_peer_id",
+            self.inner.lock().unwrap().hub.peer_id().to_string(),
+        );
+        let DispatchedCommand { command_id, event } = HubEvent::create_connection(direction);
+        let (tx, rx) = oneshot::channel();
+        self.inner
+            .lock()
+            .unwrap()
+            .pending_commands
+            .insert(command_id, tx);
+        self.inner.lock().unwrap().handle_event(event);
+
+        let inner = self.inner.clone();
+
+        let connection_id = match rx.await {
+            Ok(CommandResult::CreateConnection { connection_id }) => connection_id,
+            Ok(other) => panic!("unexpected command result for create connection: {other:?}"),
+            Err(_) => return ConnFinishedReason::Shutdown,
+        };
+
+        let mut rx = {
+            let mut rx = inner
+                .lock()
+                .unwrap()
+                .connections
+                .get_mut(&connection_id)
+                .map(|ConnHandle { rx, .. }| rx.take())
+                .expect("connection not found");
+            rx.take().expect("receive end not found")
+        };
+
+        let mut stream = stream.fuse();
+        let mut close_signal = close_signal.fuse();
+
+        tracing::info!(
+            "Starting connection message loop for connection {:?}",
+            connection_id
+        );
+
+        #[cfg(target_arch = "wasm32")]
+        web_sys::console::log_1(
+            &format!(
+                "WASM: Starting connection message loop for connection {:?}",
+                connection_id
+            )
+            .into(),
+        );
+
+        let result = loop {
+            futures::select! {
+                _ = close_signal => {
+                    tracing::debug!("close signal received, closing connection");
+                    break ConnFinishedReason::WeDisconnected;
+                },
+                next_inbound_msg = stream.next() => {
+                    if let Some(msg) = next_inbound_msg {
+                        match msg {
+                            Ok(msg) => {
+                                tracing::debug!("Received {} bytes from stream", msg.len());
+                                #[cfg(target_arch = "wasm32")]
+                                web_sys::console::log_1(&format!("WASM: Received {} bytes from stream", msg.len()).into());
+                                let DispatchedCommand { event, .. } = HubEvent::receive(connection_id, msg);
+                                inner.lock().unwrap().handle_event(event);
+                            }
+                            Err(e) => {
+                                tracing::error!(err=?e, "error receiving, closing connection");
+                                break ConnFinishedReason::ErrorReceiving(e.to_string());
+                            }
+                        }
+                    } else {
+                        tracing::debug!("stream closed, closing connection");
+                        break ConnFinishedReason::TheyDisconnected;
+                    }
+                },
+                next_outbound = rx.next() => {
+                    if let Some(next_outbound) = next_outbound {
+                        tracing::debug!("Sending {} bytes to stream", next_outbound.len());
+                        #[cfg(target_arch = "wasm32")]
+                        web_sys::console::log_1(&format!("WASM: Sending {} bytes to stream", next_outbound.len()).into());
+                        if let Err(e) = sink.send(next_outbound).await {
+                            tracing::error!(err=?e, "error sending, closing connection");
+                            break ConnFinishedReason::ErrorSending(e.to_string());
+                        }
+                    } else {
+                        tracing::debug!(?connection_id, "connection closing");
+                        #[cfg(target_arch = "wasm32")]
+                        web_sys::console::log_1(&format!("WASM: Connection {:?} closing", connection_id).into());
+                        break ConnFinishedReason::WeDisconnected;
+                    }
+                }
+            }
+        };
+        if !(result == ConnFinishedReason::WeDisconnected) {
+            let event = HubEvent::connection_lost(connection_id);
+            inner.lock().unwrap().handle_event(event);
+        }
+        if let Err(e) = sink.close().await {
+            tracing::error!(err=?e, "error closing sink");
+        }
+        result
     }
 
     /// Wait for some connection to be established with the given remote peer ID
@@ -713,6 +890,23 @@ impl Repo {
     /// The peer ID of this instance
     pub fn peer_id(&self) -> PeerId {
         self.inner.lock().unwrap().hub.peer_id().clone()
+    }
+
+    /// List all document IDs that are stored locally
+    ///
+    /// This method returns document IDs of all currently active document handles.
+    /// For now, this implementation returns the document IDs of documents that are
+    /// currently loaded in memory. A future enhancement could scan storage for
+    /// persisted documents, but this would require significant changes to the
+    /// architecture to access storage from the Repo level.
+    pub fn list_documents(&self) -> Result<Vec<DocumentId>, Stopped> {
+        let inner = self.inner.lock().unwrap();
+        let doc_ids: Vec<DocumentId> = inner
+            .actors
+            .values()
+            .map(|actor_handle| actor_handle.doc.document_id().clone())
+            .collect();
+        Ok(doc_ids)
     }
 
     /// Stop the `Samod` instance.

@@ -7,6 +7,8 @@ pub mod gio;
 pub mod localpool;
 #[cfg(feature = "tokio")]
 mod tokio;
+#[cfg(target_arch = "wasm32")]
+pub mod wasm;
 
 /// An abstraction over the asynchronous runtime the repo is running on
 ///

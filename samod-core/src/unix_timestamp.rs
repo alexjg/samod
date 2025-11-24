@@ -1,7 +1,13 @@
 use std::{
     ops::{Add, AddAssign, Sub},
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::Duration,
 };
+
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::{SystemTime, UNIX_EPOCH};
+
+#[cfg(target_arch = "wasm32")]
+use js_sys;
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct UnixTimestamp {
@@ -22,6 +28,40 @@ impl std::fmt::Debug for UnixTimestamp {
 
 impl UnixTimestamp {
     pub fn now() -> Self {
+        #[cfg(target_arch = "wasm32")]
+        {
+            // Try to get external time provider first
+            if let Some(millis) = crate::time_provider::get_external_time() {
+                return Self { millis };
+            }
+
+            let result = std::panic::catch_unwind(|| js_sys::Date::now());
+
+            match result {
+                Ok(millis) => Self {
+                    millis: millis as u128,
+                },
+                Err(_) => {
+                    panic!(
+                        "Cannot access Date.now() in this WASM environment!\n\
+                   \n\
+                   If you're using Node.js or another WASI runtime, you need to provide \n\
+                   a time function. Example for Node.js:\n\
+                   \n\
+                   ```javascript\n\
+                   import init, {{ set_time_provider }} from './samod_core.js';\n\
+                   \n\
+                   await init();\n\
+                   set_time_provider(() => Date.now());\n\
+                   ```\n\
+                   \n\
+                   See https://github.com/alexjg/samod#wasi-environments for more details."
+                    )
+                }
+            }
+        }
+
+        #[cfg(not(target_arch = "wasm32"))]
         Self {
             millis: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
