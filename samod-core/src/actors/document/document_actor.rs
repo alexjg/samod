@@ -151,6 +151,10 @@ impl DocumentActor {
         self.local_peer_id.clone()
     }
 
+    pub fn document(&self) -> &Automerge {
+        self.doc_state.document()
+    }
+
     /// Provides mutable access to the document with automatic side effect handling.
     ///
     /// The closure receives a mutable reference to the Automerge document. Any modifications
