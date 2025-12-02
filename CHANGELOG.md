@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.5.1 - 2025-12-02
+
+### Added 
+
+* `From<u32>` and `Into<u32>` impls for  `samod_core::{CommandId, IoTaskId,
+  ConnectionId, DocumentActorId}`
+* `Clone` implementations for various `samod_core` types
+* `DocumentId::as_bytes`
+* `UnixTimestamp::from_millis`
+
+### Updated
+
+* Updated to `automerge` 0.7.1
+
 ## 0.5.0 - 2025-10-03
 
 ### Changed
