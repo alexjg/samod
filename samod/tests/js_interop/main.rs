@@ -142,12 +142,10 @@ async fn samod_connected_to_js_server(port: u16, peer_id: Option<String>) -> Rep
         .await
         .unwrap();
 
-    let driver = handle.connect_tungstenite(conn, ConnDirection::Outgoing);
+    handle
+        .connect_tungstenite(conn, ConnDirection::Outgoing)
+        .unwrap();
 
-    tokio::spawn(async {
-        let finished = driver.await;
-        tracing::error!(?finished, "connection finished");
-    });
     handle
 }
 
@@ -194,9 +192,9 @@ async fn handle_socket(
     repo: Repo,
     running_connections: Arc<Mutex<Vec<tokio::task::JoinHandle<()>>>>,
 ) {
-    let driver = repo.accept_axum(socket);
-    let handle = tokio::spawn(async {
-        let finished = driver.await;
+    let conn = repo.accept_axum(socket).unwrap();
+    let handle = tokio::spawn(async move {
+        let finished = conn.finished().await;
         tracing::error!(?finished, "connection finished");
     });
     running_connections.lock().await.push(handle);

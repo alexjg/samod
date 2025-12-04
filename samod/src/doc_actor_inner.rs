@@ -93,7 +93,7 @@ impl DocActorInner {
             peer_state_changes,
         } = results;
         for task in io_tasks {
-            if let Err(_e) = self.tx_io.unbounded_send(IoLoopTask {
+            if let Err(_e) = self.tx_io.unbounded_send(IoLoopTask::Storage {
                 doc_id: self.document_id.clone(),
                 task,
                 actor_id: self.actor_id,

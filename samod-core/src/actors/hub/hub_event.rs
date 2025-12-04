@@ -20,7 +20,7 @@ use super::{DispatchedCommand, HubEventPayload, HubInput, io::HubIoResult};
 ///
 /// Events are created using the static methods on this struct, which provide
 /// type-safe construction of different event types.
-#[derive(Debug,Clone)]
+#[derive(Debug, Clone)]
 pub struct HubEvent {
     pub(crate) payload: HubEventPayload,
 }

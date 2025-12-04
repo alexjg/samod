@@ -318,7 +318,7 @@ async fn peer_state_listeners_smoke() {
     let (peer_states_on_bob, mut more_states) = bob_handle.peers();
     assert_eq!(peer_states_on_bob.len(), 1);
 
-    assert!(peer_states_on_bob.contains_key(&alice_on_bob));
+    assert!(peer_states_on_bob.contains_key(&alice_on_bob.id()));
 
     // Now make a change on alice
 
@@ -333,7 +333,7 @@ async fn peer_state_listeners_smoke() {
                 bob_received
                     .lock()
                     .unwrap()
-                    .push(change.get(&alice_on_bob).unwrap().shared_heads.clone());
+                    .push(change.get(&alice_on_bob.id()).unwrap().shared_heads.clone());
             }
         }
     });
@@ -367,7 +367,6 @@ async fn they_have_our_changes_smoke() {
         atomic::{AtomicBool, Ordering},
     };
 
-    
     init_logging();
 
     let alice = Repo::build_tokio()
@@ -405,7 +404,7 @@ async fn they_have_our_changes_smoke() {
         async move {
             use std::sync::atomic::Ordering;
 
-            bob_handle.they_have_our_changes(alice_on_bob).await;
+            bob_handle.they_have_our_changes(alice_on_bob.id()).await;
             alice_has_changes.store(true, Ordering::SeqCst);
         }
     });

@@ -75,7 +75,7 @@ impl Connection {
                 WireMessage::Join {
                     sender_id: local_peer_id.clone(),
                     supported_protocol_versions: vec!["1".to_string()],
-                    metadata: local_metadata.as_ref().map(|meta| meta.to_wire(None)),
+                    metadata: local_metadata.as_ref().map(|meta| meta.to_wire()),
                 },
             );
         }
@@ -127,7 +127,7 @@ impl Connection {
                             sender_id: self.local_peer_id.clone(),
                             selected_protocol_version: "1".to_string(),
                             target_id: sender_id.clone(),
-                            metadata: self.local_metadata.as_ref().map(|meta| meta.to_wire(None)),
+                            metadata: self.local_metadata.as_ref().map(|meta| meta.to_wire()),
                         },
                     );
                     self.phase = ConnectionPhase::Established(EstablishedConnection {

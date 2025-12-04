@@ -98,7 +98,6 @@ impl DocHandle {
         HashMap<ConnectionId, PeerDocState>,
         impl Stream<Item = HashMap<ConnectionId, PeerDocState>> + 'static + use<>,
     ) {
-        
         self.inner.lock().unwrap().peers()
     }
 
@@ -141,9 +140,9 @@ impl DocHandle {
                     && their_heads
                         .iter()
                         .all(|h| inner.document().get_change_by_hash(h).is_some())
-                    {
-                        return;
-                    }
+                {
+                    return;
+                }
                 state_changes
             };
             while let Some(changes) = state_changes.next().await {

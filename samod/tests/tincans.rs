@@ -156,15 +156,29 @@ pub(crate) fn connect_repos(left: &Repo, right: &Repo) -> Connected {
 
     let left = left.clone();
     let left_fut = tokio::spawn(async move {
-        let drive_conn = left.connect(left_recv, left_send, ConnDirection::Outgoing);
-        drive_conn.await;
-        tracing::info!("left finished");
+        let Ok(conn) = left
+            .connect(left_recv, left_send, ConnDirection::Outgoing)
+            .inspect_err(|e| {
+                tracing::error!("left connection error: {:?}", e);
+            })
+        else {
+            return;
+        };
+        let reason = conn.finished().await;
+        tracing::info!("left finished: {:?}", reason);
     });
     let right = right.clone();
     let right_fut = tokio::spawn(async move {
-        let drive_conn = right.connect(right_recv, right_send, ConnDirection::Incoming);
-        drive_conn.await;
-        tracing::info!("right finished");
+        let Ok(conn) = right
+            .connect(right_recv, right_send, ConnDirection::Incoming)
+            .inspect_err(|e| {
+                tracing::error!("right connection error: {:?}", e);
+            })
+        else {
+            return;
+        };
+        let reason = conn.finished().await;
+        tracing::info!("left finished: {:?}", reason);
     });
     Connected {
         cancel,
