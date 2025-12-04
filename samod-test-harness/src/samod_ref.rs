@@ -1,9 +1,10 @@
+use std::collections::HashMap;
+
 use automerge::Automerge;
 use samod_core::{
     CommandId, ConnectionId, DocumentActorId, DocumentChanged, DocumentId, PeerId, StorageId,
     actors::{DocumentError, hub::HubEvent},
-    network::ConnectionEvent,
-    network::ConnectionInfo,
+    network::{ConnectionEvent, ConnectionInfo, PeerDocState},
 };
 
 use crate::samod_id::SamodId;
@@ -115,6 +116,10 @@ impl SamodRef<'_> {
         self.wrapper().push_event(event)
     }
 
+    pub fn document(&self, doc_id: &DocumentId) -> Option<&Automerge> {
+        self.wrapper_ref().document(doc_id)
+    }
+
     pub fn with_document<F, R>(&mut self, doc_id: &DocumentId, f: F) -> Result<R, DocumentError>
     where
         F: FnOnce(&mut Automerge) -> R,
@@ -148,6 +153,13 @@ impl SamodRef<'_> {
             .expect("Samod not found")
     }
 
+    fn wrapper_ref(&self) -> &SamodWrapper {
+        self.network
+            .samods
+            .get(self.samod_id)
+            .expect("Samod not found")
+    }
+
     pub fn set_announce_policy(&mut self, policy: Box<dyn Fn(DocumentId, PeerId) -> bool>) {
         self.network
             .samods
@@ -162,5 +174,16 @@ impl SamodRef<'_> {
 
     pub fn stop(&mut self) {
         self.wrapper().stop();
+    }
+
+    pub fn peer_states(&self, doc_id: &DocumentId) -> HashMap<ConnectionId, PeerDocState> {
+        self.wrapper_ref().peer_doc_states(doc_id)
+    }
+
+    pub fn peer_state_changes(
+        &self,
+        doc_id: &DocumentId,
+    ) -> &[HashMap<ConnectionId, PeerDocState>] {
+        self.wrapper_ref().peer_state_changes(doc_id)
     }
 }

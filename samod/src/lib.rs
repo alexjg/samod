@@ -299,16 +299,16 @@ use futures::{
     stream::FuturesUnordered,
 };
 use rand::SeedableRng;
-pub use samod_core::{AutomergeUrl, DocumentId, PeerId, network::ConnDirection};
+pub use samod_core::{AutomergeUrl, ConnectionId, DocumentId, PeerId, network::ConnDirection};
 use samod_core::{
-    CommandId, CommandResult, ConnectionId, DocumentActorId, LoaderState, UnixTimestamp,
+    CommandId, CommandResult, DocumentActorId, LoaderState, UnixTimestamp,
     actors::{
         DocToHubMsg,
         document::{DocumentActor, SpawnArgs},
         hub::{DispatchedCommand, Hub, HubEvent, HubResults, io::HubIoAction},
     },
     io::{IoResult, IoTask},
-    network::{ConnectionEvent, ConnectionState},
+    network::ConnectionEvent,
 };
 use tracing::Instrument;
 
@@ -328,7 +328,7 @@ mod doc_runner;
 mod io_loop;
 pub use doc_handle::DocHandle;
 mod peer_connection_info;
-pub use peer_connection_info::ConnectionInfo;
+pub use peer_connection_info::{ConnectionInfo, ConnectionState, PeerDocState};
 mod stopped;
 pub use stopped::Stopped;
 pub mod storage;
@@ -686,16 +686,17 @@ impl Repo {
     ///
     /// This will resolve immediately if the peer is already connected, otherwise
     /// it will resolve when a connection with the given peer ID is established.
-    pub async fn when_connected(&self, peer_id: PeerId) -> Result<(), Stopped> {
+    pub async fn when_connected(&self, peer_id: PeerId) -> Result<ConnectionId, Stopped> {
         let (tx, rx) = oneshot::channel();
         {
             let mut inner = self.inner.lock().unwrap();
 
             for info in inner.hub.connections() {
-                if let ConnectionState::Connected { their_peer_id, .. } = info.state
+                if let samod_core::network::ConnectionState::Connected { their_peer_id, .. } =
+                    info.state
                     && their_peer_id == peer_id
                 {
-                    return Ok(());
+                    return Ok(info.id);
                 }
             }
             inner
@@ -705,7 +706,7 @@ impl Repo {
                 .push(tx);
         }
         match rx.await {
-            Ok(()) => Ok(()),
+            Ok(id) => Ok(id),
             Err(_) => Err(Stopped), // Stopped
         }
     }
@@ -713,6 +714,18 @@ impl Repo {
     /// The peer ID of this instance
     pub fn peer_id(&self) -> PeerId {
         self.inner.lock().unwrap().hub.peer_id().clone()
+    }
+
+    pub async fn connected_peers(&self) -> Vec<ConnectionInfo> {
+        self.inner
+            .lock()
+            .unwrap()
+            .hub
+            .connections()
+            .clone()
+            .into_iter()
+            .map(|c| c.into())
+            .collect()
     }
 
     /// Stop the `Samod` instance.
@@ -742,7 +755,7 @@ struct Inner {
     connections: HashMap<ConnectionId, ConnHandle>,
     tx_io: UnboundedSender<io_loop::IoLoopTask>,
     tx_to_core: UnboundedSender<(DocumentActorId, DocToHubMsg)>,
-    waiting_for_connection: HashMap<PeerId, Vec<oneshot::Sender<()>>>,
+    waiting_for_connection: HashMap<PeerId, Vec<oneshot::Sender<ConnectionId>>>,
     stop_waiters: Vec<oneshot::Sender<()>>,
     rng: rand::rngs::StdRng,
 }
@@ -815,12 +828,12 @@ impl Inner {
         for evt in connection_events {
             match evt {
                 ConnectionEvent::HandshakeCompleted {
-                    connection_id: _,
+                    connection_id,
                     peer_info,
                 } => {
                     if let Some(tx) = self.waiting_for_connection.get_mut(&peer_info.peer_id) {
                         for tx in tx.drain(..) {
-                            let _ = tx.send(());
+                            let _ = tx.send(connection_id);
                         }
                     }
                 }

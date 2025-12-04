@@ -12,6 +12,7 @@ use crate::actors::document::{ActorInput, DocActorResult, DocumentStatus, WithDo
 use crate::actors::messages::{Broadcast, DocToHubMsgPayload};
 use crate::actors::{DocToHubMsg, HubToDocMsg, RunState};
 use crate::io::{IoResult, IoTaskId};
+use crate::network::PeerDocState;
 use crate::{ConnectionId, DocumentActorId, DocumentChanged, DocumentId, PeerId, UnixTimestamp};
 
 use super::{doc_state::DocState, errors::DocumentError};
@@ -358,6 +359,19 @@ impl DocumentActor {
         self.run_state == RunState::Stopped
     }
 
+    pub fn peers(&self) -> HashMap<ConnectionId, PeerDocState> {
+        self.peer_connections
+            .iter()
+            .map(|(k, v)| (*k, v.state().clone()))
+            .collect()
+    }
+
+    pub fn conn_peer_id(&self, conn_id: ConnectionId) -> Option<PeerId> {
+        self.peer_connections
+            .get(&conn_id)
+            .map(|pc| pc.peer_id.clone())
+    }
+
     fn enqueue_announce_policy_checks(&mut self, out: &mut DocActorResult) {
         for peer_conn in self.peer_connections.values_mut() {
             if peer_conn.announce_policy() == AnnouncePolicy::Unknown {
@@ -397,6 +411,7 @@ impl DocumentActor {
             .filter_map(|(conn_id, conn)| conn.pop().map(|state| (*conn_id, state)))
             .collect::<HashMap<_, _>>();
         if !states.is_empty() {
+            out.peer_state_changes = states.clone();
             out.send_message(DocToHubMsgPayload::PeerStatesChanged { new_states: states })
         }
     }

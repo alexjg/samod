@@ -1,8 +1,8 @@
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 
 use automerge::Automerge;
 use samod_core::{
-    DocumentActorId, DocumentChanged, DocumentId, PeerId, UnixTimestamp,
+    ConnectionId, DocumentActorId, DocumentChanged, DocumentId, PeerId, UnixTimestamp,
     actors::{
         DocToHubMsg, HubToDocMsg,
         document::{
@@ -11,6 +11,7 @@ use samod_core::{
         },
     },
     io::{IoResult, IoTask},
+    network::PeerDocState,
 };
 
 use crate::Storage;
@@ -24,6 +25,7 @@ pub(crate) struct DocActorRunner {
     outbox: VecDeque<DocToHubMsg>,
     ephemera: Vec<Vec<u8>>,
     doc_changed: Vec<DocumentChanged>,
+    peer_doc_state_changes: Vec<HashMap<ConnectionId, PeerDocState>>,
 }
 
 impl DocActorRunner {
@@ -39,6 +41,7 @@ impl DocActorRunner {
             outbox: VecDeque::new(),
             ephemera: Vec::new(),
             doc_changed: Vec::new(),
+            peer_doc_state_changes: Vec::new(),
         };
         runner.enqueue_events(results);
         runner
@@ -94,6 +97,7 @@ impl DocActorRunner {
             ephemeral_messages,
             change_events,
             stopped: _,
+            peer_state_changes,
         } = result;
         for task in io_tasks {
             self.inbox.push_back(ActorEvent::Io(task));
@@ -103,6 +107,9 @@ impl DocActorRunner {
         }
         self.ephemera.extend(ephemeral_messages);
         self.doc_changed.extend(change_events);
+        if !peer_state_changes.is_empty() {
+            self.peer_doc_state_changes.push(peer_state_changes);
+        }
     }
 
     pub fn with_document<F, R>(&mut self, now: UnixTimestamp, f: F) -> Result<R, DocumentError>
@@ -148,6 +155,17 @@ impl DocActorRunner {
 
     pub(crate) fn is_stopped(&self) -> bool {
         self.actor.is_stopped()
+    }
+
+    pub(crate) fn peer_doc_state_changes(&self) -> &[HashMap<ConnectionId, PeerDocState>] {
+        &self.peer_doc_state_changes
+    }
+
+    #[expect(dead_code)]
+    pub(crate) fn pop_peer_doc_state_changes(
+        &mut self,
+    ) -> Vec<HashMap<ConnectionId, PeerDocState>> {
+        std::mem::take(&mut self.peer_doc_state_changes)
     }
 }
 
