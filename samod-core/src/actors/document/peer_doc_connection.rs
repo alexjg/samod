@@ -52,6 +52,8 @@ impl PeerDocConnection {
         self.dirty = true; // Mark as dirty since we received a message
         self.state.last_received = Some(now);
         self.state.last_acked_heads = self.sync_state.their_heads.clone();
+        self.state.shared_heads = Some(self.sync_state.shared_heads.clone());
+        self.state.their_heads = self.sync_state.their_heads.clone();
         Ok(())
     }
 
@@ -65,6 +67,7 @@ impl PeerDocConnection {
         if let Some(msg) = &message {
             self.state.last_sent = Some(now);
             self.state.last_sent_heads = Some(msg.heads.clone());
+            self.state.shared_heads = Some(self.sync_state.shared_heads.clone());
             self.dirty = true; // Mark as dirty since we generated a message
         }
         message
@@ -81,6 +84,10 @@ impl PeerDocConnection {
         } else {
             None
         }
+    }
+
+    pub(super) fn state(&self) -> &PeerDocState {
+        &self.state
     }
 
     pub(super) fn announce_policy(&self) -> AnnouncePolicy {

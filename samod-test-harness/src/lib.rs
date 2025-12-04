@@ -29,6 +29,11 @@ struct Connection {
     right_samod: SamodId,
 }
 
+pub struct Connected {
+    pub left: ConnectionId,
+    pub right: ConnectionId,
+}
+
 impl Default for Network {
     fn default() -> Self {
         Self::new()
@@ -64,7 +69,7 @@ impl Network {
         id
     }
 
-    pub fn connect(&mut self, left: SamodId, right: SamodId) {
+    pub fn connect(&mut self, left: SamodId, right: SamodId) -> Connected {
         // Left samod initiates with an outgoing connection
         let left_connection = self
             .samods
@@ -84,6 +89,11 @@ impl Network {
             right_connection,
             right_samod: right,
         });
+
+        Connected {
+            left: left_connection,
+            right: right_connection,
+        }
     }
 
     pub fn disconnect(&mut self, left: SamodId, right: SamodId) {
@@ -205,9 +215,11 @@ impl Network {
                                 .or_default()
                                 .push_back(event);
                             if let Some(target_peer_id) = samods_to_peer_ids.get(&target_samod_id)
-                                && sender == peer_id && *target_peer_id == recipient {
-                                    seen = true;
-                                }
+                                && sender == peer_id
+                                && *target_peer_id == recipient
+                            {
+                                seen = true;
+                            }
                         }
                     }
                 }

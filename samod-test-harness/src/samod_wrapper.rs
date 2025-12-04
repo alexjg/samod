@@ -16,7 +16,7 @@ use samod_core::{
         },
     },
     io::{IoResult, IoTask},
-    network::{ConnDirection, ConnectionEvent, ConnectionInfo},
+    network::{ConnDirection, ConnectionEvent, ConnectionInfo, PeerDocState},
 };
 
 use crate::{Storage, doc_actor_runner::DocActorRunner};
@@ -319,6 +319,13 @@ impl SamodWrapper {
             .map(|runner| runner.actor())
     }
 
+    pub fn document(&self, doc_id: &DocumentId) -> Option<&Automerge> {
+        self.document_actors
+            .values()
+            .find(|d| d.document_id() == doc_id)
+            .map(|d| d.actor().document())
+    }
+
     pub fn with_document<F, R>(&mut self, doc_id: &DocumentId, f: F) -> Result<R, DocumentError>
     where
         F: FnOnce(&mut Automerge) -> R,
@@ -424,5 +431,30 @@ impl SamodWrapper {
         self.inbox.push_back(HubEvent::stop());
         self.handle_events();
         assert!(self.hub.is_stopped());
+    }
+
+    pub fn peer_doc_states(&self, doc_id: &DocumentId) -> HashMap<ConnectionId, PeerDocState> {
+        let Some(runner) = self
+            .document_actors
+            .values()
+            .find(|a| a.document_id() == doc_id)
+        else {
+            return HashMap::new();
+        };
+        runner.actor().peers()
+    }
+
+    pub fn peer_state_changes(
+        &self,
+        doc_id: &DocumentId,
+    ) -> &[HashMap<ConnectionId, PeerDocState>] {
+        let Some(runner) = self
+            .document_actors
+            .values()
+            .find(|a| a.document_id() == doc_id)
+        else {
+            return &[];
+        };
+        runner.peer_doc_state_changes()
     }
 }

@@ -1,7 +1,9 @@
+use std::collections::HashMap;
+
 use automerge::Automerge;
-use futures::channel::mpsc;
+use futures::{Stream, channel::mpsc};
 use samod_core::{
-    DocumentActorId, DocumentChanged, DocumentId, UnixTimestamp,
+    ConnectionId, DocumentActorId, DocumentChanged, DocumentId, UnixTimestamp,
     actors::{
         DocToHubMsg,
         document::{DocActorResult, DocumentActor, WithDocResult},
@@ -11,6 +13,7 @@ use samod_core::{
 use crate::{
     actor_task::ActorTask,
     io_loop::{self, IoLoopTask},
+    peer_connection_info::PeerDocState,
     unbounded::UnboundedSender,
 };
 
@@ -21,6 +24,7 @@ pub(crate) struct DocActorInner {
     tx_io: UnboundedSender<io_loop::IoLoopTask>,
     ephemera_listeners: Vec<mpsc::UnboundedSender<Vec<u8>>>,
     change_listeners: Vec<mpsc::UnboundedSender<DocumentChanged>>,
+    peer_state_change_listeners: Vec<mpsc::UnboundedSender<HashMap<ConnectionId, PeerDocState>>>,
     actor: DocumentActor,
 }
 
@@ -39,8 +43,13 @@ impl DocActorInner {
             tx_io,
             ephemera_listeners: Vec::new(),
             change_listeners: Vec::new(),
+            peer_state_change_listeners: Vec::new(),
             actor,
         }
+    }
+
+    pub(crate) fn document(&self) -> &Automerge {
+        self.actor.document()
     }
 
     pub(crate) fn with_document<F, R>(&mut self, f: F) -> R
@@ -81,6 +90,7 @@ impl DocActorInner {
             ephemeral_messages,
             change_events,
             stopped: _,
+            peer_state_changes,
         } = results;
         for task in io_tasks {
             if let Err(_e) = self.tx_io.unbounded_send(IoLoopTask {
@@ -121,6 +131,20 @@ impl DocActorInner {
                 true
             });
         }
+
+        if !peer_state_changes.is_empty() {
+            let changes = peer_state_changes
+                .into_iter()
+                .map(|(k, v)| (k, v.into()))
+                .collect::<HashMap<_, _>>();
+            self.peer_state_change_listeners
+                .retain_mut(move |listener| {
+                    if listener.unbounded_send(changes.clone()).is_err() {
+                        return false;
+                    }
+                    true
+                });
+        }
     }
 
     pub(crate) fn handle_task(&mut self, task: ActorTask) {
@@ -137,5 +161,18 @@ impl DocActorInner {
 
     pub(crate) fn is_stopped(&self) -> bool {
         self.actor.is_stopped()
+    }
+
+    pub(crate) fn peers(
+        &mut self,
+    ) -> (
+        HashMap<ConnectionId, PeerDocState>,
+        impl Stream<Item = HashMap<ConnectionId, PeerDocState>> + 'static + use<>,
+    ) {
+        let peers = self.actor.peers();
+        let (tx, rx) = mpsc::unbounded();
+        self.peer_state_change_listeners.push(tx);
+        let peers = peers.into_iter().map(|(k, v)| (k, v.into())).collect();
+        (peers, rx)
     }
 }

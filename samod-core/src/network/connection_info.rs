@@ -33,6 +33,10 @@ pub struct PeerDocState {
     pub last_sent_heads: Option<Vec<automerge::ChangeHash>>,
     /// The last heads of the document that the peer said they had
     pub last_acked_heads: Option<Vec<automerge::ChangeHash>>,
+    /// The minimum heads which we share with the other end
+    pub shared_heads: Option<Vec<automerge::ChangeHash>>,
+    /// The last heads they said they had
+    pub their_heads: Option<Vec<automerge::ChangeHash>>,
 }
 
 impl PeerDocState {
@@ -42,6 +46,8 @@ impl PeerDocState {
             last_sent: None,
             last_sent_heads: None,
             last_acked_heads: None,
+            shared_heads: None,
+            their_heads: None,
         }
     }
 }

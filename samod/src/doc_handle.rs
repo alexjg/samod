@@ -1,10 +1,13 @@
-use std::sync::{Arc, Mutex};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+};
 
-use automerge::Automerge;
-use futures::Stream;
+use automerge::{Automerge, ReadDoc};
+use futures::{Stream, StreamExt};
 use samod_core::{AutomergeUrl, DocumentChanged, DocumentId};
 
-use crate::doc_actor_inner::DocActorInner;
+use crate::{ConnectionId, doc_actor_inner::DocActorInner, peer_connection_info::PeerDocState};
 
 /// The state of a single [`automerge`] document the [`Repo`](crate::Repo) is managing
 ///
@@ -83,5 +86,83 @@ impl DocHandle {
             .lock()
             .unwrap()
             .broadcast_ephemeral_message(message);
+    }
+
+    /// Get the current state of all peers connected to this document, and a stream of changes to that set
+    ///
+    /// The returned stream will receive updates in the form of a map from
+    /// connection IDs which have changed to the new state for that connection
+    pub fn peers(
+        &self,
+    ) -> (
+        HashMap<ConnectionId, PeerDocState>,
+        impl Stream<Item = HashMap<ConnectionId, PeerDocState>> + 'static + use<>,
+    ) {
+        
+        self.inner.lock().unwrap().peers()
+    }
+
+    /// Wait for a connection to have said they have everything we have
+    pub fn they_have_our_changes(&self, conn: ConnectionId) -> impl Future<Output = ()> + 'static {
+        let inner = self.inner.clone();
+        async move {
+            let mut state_changes = {
+                let mut inner = inner.lock().unwrap();
+                let local_heads = inner.document().get_heads();
+                let (current, state_changes) = inner.peers();
+                if (current
+                    .get(&conn)
+                    .map(|c| c.shared_heads == Some(local_heads)))
+                .unwrap_or(false)
+                {
+                    return;
+                }
+                state_changes
+            };
+            while let Some(changes) = state_changes.next().await {
+                let Some(change) = changes.get(&conn) else {
+                    continue;
+                };
+                let local_heads = inner.lock().unwrap().document().get_heads();
+                if change.shared_heads == Some(local_heads) {
+                    break;
+                }
+            }
+        }
+    }
+
+    pub fn we_have_their_changes(&self, conn: ConnectionId) -> impl Future<Output = ()> + 'static {
+        let inner = self.inner.clone();
+        async move {
+            let mut state_changes = {
+                let mut inner = inner.lock().unwrap();
+                let (current, state_changes) = inner.peers();
+                if let Some(their_heads) = current.get(&conn).and_then(|c| c.their_heads.as_ref())
+                    && their_heads
+                        .iter()
+                        .all(|h| inner.document().get_change_by_hash(h).is_some())
+                    {
+                        return;
+                    }
+                state_changes
+            };
+            while let Some(changes) = state_changes.next().await {
+                let Some(change) = changes.get(&conn) else {
+                    continue;
+                };
+                let Some(their_heads) = change.their_heads.as_ref() else {
+                    continue;
+                };
+                {
+                    let inner = inner.lock().unwrap();
+                    if their_heads
+                        .iter()
+                        .all(|h| inner.document().get_change_by_hash(h).is_some())
+                    {
+                        return;
+                    }
+                }
+            }
+        }
     }
 }

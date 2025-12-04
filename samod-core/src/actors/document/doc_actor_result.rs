@@ -1,9 +1,12 @@
+use std::collections::HashMap;
+
 use automerge::ChangeHash;
 
 use crate::{
-    DocumentChanged, PeerId, StorageKey,
+    ConnectionId, DocumentChanged, PeerId, StorageKey,
     actors::{DocToHubMsg, document::io::DocumentIoTask, messages::DocToHubMsgPayload},
     io::{IoTask, IoTaskId, StorageTask},
+    network::PeerDocState,
 };
 
 /// Result of processing a message or I/O completion.
@@ -19,6 +22,8 @@ pub struct DocActorResult {
     pub change_events: Vec<DocumentChanged>,
     /// Whether this document actor is stopped
     pub stopped: bool,
+    /// Connections which have changed state for this document
+    pub peer_state_changes: HashMap<ConnectionId, PeerDocState>,
 }
 
 impl DocActorResult {
@@ -30,6 +35,7 @@ impl DocActorResult {
             ephemeral_messages: Vec::new(),
             change_events: Vec::new(),
             stopped: false,
+            peer_state_changes: HashMap::new(),
         }
     }
 
