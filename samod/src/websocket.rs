@@ -1,6 +1,6 @@
-use futures::{Future, Sink, SinkExt, Stream, StreamExt};
+use futures::{Sink, SinkExt, Stream, StreamExt};
 
-use crate::{ConnDirection, ConnFinishedReason, Repo};
+use crate::{ConnDirection, Connection, Repo, Stopped};
 
 /// A copy of tungstenite::Message
 ///
@@ -76,7 +76,7 @@ impl Repo {
         &self,
         socket: S,
         direction: ConnDirection,
-    ) -> impl Future<Output = ConnFinishedReason> + 'static
+    ) -> Result<Connection, Stopped>
     where
         S: Sink<tungstenite::Message, Error = tungstenite::Error>
             + Stream<Item = Result<tungstenite::Message, tungstenite::Error>>
@@ -92,7 +92,7 @@ impl Repo {
 
     /// Accept a websocket in an axum handler
     #[cfg(feature = "axum")]
-    pub fn accept_axum<S>(&self, stream: S) -> impl Future<Output = ConnFinishedReason> + 'static
+    pub fn accept_axum<S>(&self, stream: S) -> Result<Connection, Stopped>
     where
         S: Sink<axum::extract::ws::Message, Error = axum::Error>
             + Stream<Item = Result<axum::extract::ws::Message, axum::Error>>
@@ -119,7 +119,7 @@ impl Repo {
         &self,
         stream: S,
         direction: ConnDirection,
-    ) -> impl Future<Output = ConnFinishedReason> + 'static
+    ) -> Result<Connection, Stopped>
     where
         M: Into<WsMessage> + From<WsMessage> + Send + 'static,
         S: Sink<M, Error = NetworkError> + Stream<Item = Result<M, NetworkError>> + Send + 'static,

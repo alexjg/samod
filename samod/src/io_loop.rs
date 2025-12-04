@@ -1,24 +1,62 @@
-use std::sync::{Arc, Mutex};
+use std::{
+    pin::Pin,
+    sync::{Arc, Mutex},
+};
 
-use futures::{FutureExt, StreamExt, stream::FuturesUnordered};
+use futures::{
+    FutureExt, Sink, SinkExt, StreamExt,
+    stream::{BoxStream, FuturesUnordered},
+};
 use samod_core::{
     DocumentActorId, DocumentId, PeerId,
-    actors::document::io::{DocumentIoResult, DocumentIoTask},
+    actors::{
+        document::io::{DocumentIoResult, DocumentIoTask},
+        hub::{DispatchedCommand, HubEvent},
+    },
     io::{IoResult, IoTask, StorageResult, StorageTask},
 };
 
 use crate::{
-    ActorHandle, Inner, actor_task::ActorTask, announce_policy::LocalAnnouncePolicy,
-    storage::LocalStorage, unbounded::UnboundedReceiver,
+    ActorHandle, ConnFinishedReason, Inner, actor_task::ActorTask,
+    announce_policy::LocalAnnouncePolicy, connection::ConnectionHandle, storage::LocalStorage,
+    unbounded::UnboundedReceiver,
 };
 
-pub(crate) struct IoLoopTask {
-    pub(crate) doc_id: DocumentId,
-    pub(crate) task: IoTask<DocumentIoTask>,
-    pub(crate) actor_id: DocumentActorId,
+#[derive(Debug)]
+pub(crate) enum IoLoopTask {
+    DriveConnection(DriveConnectionTask),
+    Storage {
+        doc_id: DocumentId,
+        task: IoTask<DocumentIoTask>,
+        actor_id: DocumentActorId,
+    },
 }
 
-struct IoLoopResult {
+type BoxSink<T> = Pin<
+    Box<
+        dyn Sink<T, Error = Box<dyn std::error::Error + Send + Sync + 'static>>
+            + Send
+            + 'static
+            + Unpin,
+    >,
+>;
+
+pub(crate) struct DriveConnectionTask {
+    pub(crate) conn_handle: ConnectionHandle,
+    pub(crate) stream:
+        BoxStream<'static, Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync + 'static>>>,
+    pub(crate) sink: BoxSink<Vec<u8>>,
+}
+
+impl std::fmt::Debug for DriveConnectionTask {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DriveConnectionTask")
+            .field("connection_id", &self.conn_handle.id())
+            .finish()
+    }
+}
+
+struct StorageTaskComplete {
     result: IoResult<DocumentIoResult>,
     actor_id: DocumentActorId,
 }
@@ -31,7 +69,8 @@ pub(crate) async fn io_loop<S: LocalStorage, A: LocalAnnouncePolicy>(
     announce_policy: A,
     rx: UnboundedReceiver<IoLoopTask>,
 ) {
-    let mut running_tasks = FuturesUnordered::new();
+    let mut running_storage_tasks = FuturesUnordered::new();
+    let mut running_connections = FuturesUnordered::new();
 
     loop {
         futures::select! {
@@ -40,32 +79,43 @@ pub(crate) async fn io_loop<S: LocalStorage, A: LocalAnnouncePolicy>(
                     tracing::trace!("storage loop channel closed, exiting");
                     break;
                 };
-                running_tasks.push({
-                    let storage = storage.clone();
-                    let announce_policy = announce_policy.clone();
-                    async move {
-                        let IoLoopTask { doc_id, task, actor_id } = next_task;
-                        let result = dispatch_document_task(storage.clone(), announce_policy.clone(), doc_id.clone(), task).await;
-                        IoLoopResult {
-                            result,
-                            actor_id,
-                        }
+                tracing::trace!("received task");
+                match next_task {
+                    IoLoopTask::Storage { doc_id, task, actor_id } => {
+                        running_storage_tasks.push({
+                            let storage = storage.clone();
+                            let announce_policy = announce_policy.clone();
+                            async move {
+                                // let IoLoopTask { doc_id, task, actor_id } = next_task;
+                                let result = dispatch_document_task(storage.clone(), announce_policy.clone(), doc_id.clone(), task).await;
+                                StorageTaskComplete {
+                                    result,
+                                    actor_id,
+                                }
+                            }
+                        });
+                    },
+                    IoLoopTask::DriveConnection(task) => {
+                        running_connections.push(drive_connection(inner.clone(), task));
                     }
-                });
+                }
             }
-            result = running_tasks.select_next_some() => {
-                let IoLoopResult { actor_id, result } = result;
+            result = running_storage_tasks.select_next_some() => {
+                let StorageTaskComplete { actor_id, result } = result;
                 let inner = inner.lock().unwrap();
                 let Some(ActorHandle{tx,.. }) = inner.actors.get(&actor_id) else {
                     tracing::warn!(?actor_id, "received io result for unknown actor");
                     continue;
                 };
                 let _ = tx.unbounded_send(ActorTask::IoComplete(result));
+            },
+            _ = running_connections.select_next_some() => {
+
             }
         }
     }
 
-    while let Some(IoLoopResult { result, actor_id }) = running_tasks.next().await {
+    while let Some(StorageTaskComplete { result, actor_id }) = running_storage_tasks.next().await {
         let inner = inner.lock().unwrap();
         let Some(ActorHandle { tx, .. }) = inner.actors.get(&actor_id) else {
             tracing::warn!(?actor_id, "received io result for unknown actor");
@@ -122,4 +172,57 @@ pub(crate) async fn dispatch_storage_task<S: LocalStorage>(
             StorageResult::Delete
         }
     }
+}
+
+async fn drive_connection(
+    inner: Arc<Mutex<Inner>>,
+    DriveConnectionTask {
+        conn_handle,
+        stream,
+        mut sink,
+    }: DriveConnectionTask,
+) {
+    let rx = conn_handle.take_rx();
+    let connection_id = conn_handle.id();
+    let mut stream = stream.fuse();
+    let result = loop {
+        futures::select! {
+            next_inbound_msg = stream.next() => {
+                if let Some(msg) = next_inbound_msg {
+                    match msg {
+                        Ok(msg) => {
+                            let DispatchedCommand { event, .. } = HubEvent::receive(connection_id, msg);
+                            inner.lock().unwrap().handle_event(event);
+                        }
+                        Err(e) => {
+                            tracing::error!(err=?e, "error receiving, closing connection");
+                            break ConnFinishedReason::ErrorReceiving(e.to_string());
+                        }
+                    }
+                } else {
+                    tracing::debug!("stream closed, closing connection");
+                    break ConnFinishedReason::TheyDisconnected;
+                }
+            },
+            next_outbound = rx.recv().fuse() => {
+                if let Ok(next_outbound) = next_outbound {
+                    if let Err(e) = sink.send(next_outbound).await {
+                        tracing::error!(err=?e, "error sending, closing connection");
+                        break ConnFinishedReason::ErrorSending(e.to_string());
+                    }
+                } else {
+                    tracing::debug!(?connection_id, "connection closing");
+                    break ConnFinishedReason::WeDisconnected;
+                }
+            }
+        }
+    };
+    if !(result == ConnFinishedReason::WeDisconnected) {
+        let event = HubEvent::connection_lost(connection_id);
+        inner.lock().unwrap().handle_event(event);
+    }
+    if let Err(e) = sink.close().await {
+        tracing::error!(err=?e, "error closing sink");
+    }
+    conn_handle.notify_finished(result);
 }

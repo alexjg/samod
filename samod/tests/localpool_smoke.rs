@@ -3,11 +3,7 @@ use std::convert::Infallible;
 use automerge::{
     Automerge, AutomergeError, ROOT, ReadDoc, ScalarValue, Value, transaction::Transactable,
 };
-use futures::{
-    FutureExt as _, StreamExt,
-    executor::LocalPool,
-    task::{LocalSpawnExt, SpawnExt},
-};
+use futures::{StreamExt, executor::LocalPool, task::LocalSpawnExt};
 use samod::{ConcurrencyConfig, ConnDirection};
 
 fn init_logging() {
@@ -50,25 +46,23 @@ fn test_localpool() {
                 });
 
                 // Connect bob and alice to each other
-                let alice_conn_driver = alice
+                let _alice_conn = alice
                     .connect(
                         rx_from_bob.map(Ok::<_, Infallible>),
                         tx_to_bob,
                         ConnDirection::Incoming,
                     )
-                    .map(|_| ());
-                spawner.spawn(alice_conn_driver).unwrap();
-                let bob_conn_driver = bob
+                    .unwrap();
+                let bob_conn = bob
                     .connect(
                         rx_from_alice.map(Ok::<_, Infallible>),
                         tx_to_alice,
                         ConnDirection::Outgoing,
                     )
-                    .map(|_| ());
-                spawner.spawn(bob_conn_driver).unwrap();
+                    .unwrap();
 
                 // Wait for the connection to be ready
-                bob.when_connected("alice".into()).await.unwrap();
+                bob_conn.handshake_complete().await.unwrap();
 
                 // Lookup the doc handle on Bob
                 let bob_handle = bob

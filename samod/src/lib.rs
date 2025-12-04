@@ -34,7 +34,7 @@
 //!   implementation and [`Storage`] implementation
 //! * Whenever you have connections available (maybe you are connecting to a
 //!   sync server, maybe you are receiving peer-to-peer connections) you call
-//!   [`Repo::connect`] to drive the connection state.
+//!   [`Repo::connect`] to add connections to the repo.
 //! * Create `DocHandle`s using `Repo::create` and look up existing documents
 //!   using `Repo::find`
 //! * Modify documents using `DocHandle::with_document`
@@ -77,8 +77,10 @@
 //! ### Connecting to peers
 //!
 //! Once you have a `Repo` you can connect it to peers using [`Repo::connect`].
-//! This method returns a future which must be driven to completion to run the
-//! connection. Here's an example where we use `futures::channel::mpsc` as the
+//! This method accepts a [`Stream`] and a [`Sink`] of `Vec<u8>` represnting
+//! a bidirectional communication channel and returns a [`Connection`] object
+//! which can be used to find out more information about the connection as it
+//! progresses. Here's an example where we use `futures::channel::mpsc` as the
 //! transport. We create two repos and connect them with these channels.
 //!
 //! ```rust
@@ -99,8 +101,11 @@
 //! let rx_from_bob = rx_from_bob.map(Ok::<_, Infallible>);
 //!
 //! // Run the connection futures
-//! tokio::spawn(alice.connect(rx_from_bob, tx_to_bob, ConnDirection::Outgoing));
-//! tokio::spawn(bob.connect(rx_from_alice, tx_to_alice, ConnDirection::Incoming));
+//! let alice_to_bob = alice.connect(rx_from_bob, tx_to_bob, ConnDirection::Outgoing).unwrap();
+//! bob.connect(rx_from_alice, tx_to_alice, ConnDirection::Incoming);
+//!
+//! // Now wait for alice to be connected
+//! alice_to_bob.handshake_complete().await;
 //! });
 //! ```
 //!
@@ -114,13 +119,27 @@
 //!
 //! let repo: samod::Repo = todo!();
 //! let io = tokio::net::TcpStream::connect("sync.automerge.org").await.unwrap();
-//! tokio::spawn(repo.connect_tokio_io(io, ConnDirection::Outgoing));
+//! repo.connect_tokio_io(io, ConnDirection::Outgoing);
 //! # }
 //! ```
 //!
 //! If you are connecting to JavaScript sync server using WebSockets you can enable the
 //! `tungstenite` feature and use [`Repo::connect_websocket`]. If you are accepting
 //! websocket connections in an `axum` server you can use [`Repo::accept_axum`].
+//!
+//! #### Connections
+//!
+//! The [`Connection`] returned by [`Repo::connect`] can be used to listen for
+//! changes to the connection state. Initially a connection is in a
+//! "handshaking" state, where we know nothing about the other end. Once the
+//! handshake is complete we know the peer ID and (possibly) storage ID of the
+//! other end. This information is often useful if you're specifically
+//! interested in waiting for the connection to a particular peer to be
+//! established before trying to sync changes with them. To wait for the
+//! connection to be established you can await [`Connection::handshake_complete`].
+//!
+//! It's also often useful to know when a connection has been disconnected, to
+//! learn about this you can await [`Connection::finished`].
 //!
 //! ### Managing Documents
 //!
@@ -247,8 +266,8 @@
 //! // Connect the two repos to each other
 //! let (tx_to_1, rx_from_2) = futures::channel::mpsc::unbounded();
 //! let (tx_to_2, rx_from_1) = futures::channel::mpsc::unbounded();
-//! tokio::spawn(repo2.connect(rx_from_1.map(Ok::<_, Infallible>), tx_to_1, ConnDirection::Outgoing));
-//! tokio::spawn(repo.connect(rx_from_2.map(Ok::<_, Infallible>), tx_to_2, ConnDirection::Incoming));
+//! repo2.connect(rx_from_1.map(Ok::<_, Infallible>), tx_to_1, ConnDirection::Outgoing);
+//! repo.connect(rx_from_2.map(Ok::<_, Infallible>), tx_to_2, ConnDirection::Incoming);
 //!
 //! // Wait for the second repo to be connected to the first repo
 //! repo2.when_connected(repo.peer_id()).await.unwrap();
@@ -292,14 +311,14 @@ use std::{
 };
 
 use automerge::Automerge;
-use conn_handle::ConnHandle;
 use futures::{
-    FutureExt, Sink, SinkExt, Stream, StreamExt,
-    channel::{mpsc, oneshot},
+    FutureExt, Sink, SinkExt, Stream, StreamExt, TryStreamExt, channel::oneshot,
     stream::FuturesUnordered,
 };
 use rand::SeedableRng;
-pub use samod_core::{AutomergeUrl, ConnectionId, DocumentId, PeerId, network::ConnDirection};
+pub use samod_core::{
+    AutomergeUrl, ConnectionId, DocumentId, PeerId, StorageId, network::ConnDirection,
+};
 use samod_core::{
     CommandId, CommandResult, DocumentActorId, LoaderState, UnixTimestamp,
     actors::{
@@ -320,28 +339,32 @@ mod announce_policy;
 mod builder;
 pub use builder::RepoBuilder;
 mod conn_finished_reason;
-mod conn_handle;
+mod connection;
 pub use conn_finished_reason::ConnFinishedReason;
+pub use connection::Connection;
 mod doc_actor_inner;
 mod doc_handle;
 mod doc_runner;
 mod io_loop;
 pub use doc_handle::DocHandle;
 mod peer_connection_info;
+mod peer_info;
 pub use peer_connection_info::{ConnectionInfo, ConnectionState, PeerDocState};
+pub use peer_info::PeerInfo;
 mod stopped;
 pub use stopped::Stopped;
 pub mod storage;
 pub use crate::announce_policy::{AlwaysAnnounce, AnnouncePolicy, LocalAnnouncePolicy};
 pub use crate::builder::ConcurrencyConfig;
 use crate::{
+    connection::ConnectionHandle,
     doc_actor_inner::DocActorInner,
     doc_runner::{DocRunner, SpawnedActor},
+    io_loop::{DriveConnectionTask, IoLoopTask},
     storage::Storage,
     unbounded::{UnboundedReceiver, UnboundedSender},
 };
 use crate::{
-    io_loop::IoLoopTask,
     runtime::{LocalRuntimeHandle, RuntimeHandle},
     storage::{InMemoryStorage, LocalStorage},
 };
@@ -563,7 +586,7 @@ impl Repo {
     ///
     /// let repo: samod::Repo = todo!();
     /// let io = tokio::net::TcpStream::connect("sync.automerge.org").await.unwrap();
-    /// tokio::spawn(repo.connect_tokio_io(io, ConnDirection::Outgoing));
+    /// repo.connect_tokio_io(io, ConnDirection::Outgoing).unwrap();
     /// # }
     /// ```
     #[cfg(feature = "tokio")]
@@ -571,7 +594,7 @@ impl Repo {
         &self,
         io: Io,
         direction: ConnDirection,
-    ) -> impl Future<Output = ConnFinishedReason> + 'static {
+    ) -> Result<Connection, Stopped> {
         let framed =
             tokio_util::codec::Framed::new(io, tokio_util::codec::LengthDelimitedCodec::new());
         let (write_half, read_half) = framed.split();
@@ -597,9 +620,9 @@ impl Repo {
     pub fn connect<Str, Snk, SendErr, RecvErr>(
         &self,
         stream: Str,
-        mut sink: Snk,
+        sink: Snk,
         direction: ConnDirection,
-    ) -> impl Future<Output = ConnFinishedReason> + 'static
+    ) -> Result<Connection, Stopped>
     where
         SendErr: std::error::Error + Send + Sync + 'static,
         RecvErr: std::error::Error + Send + Sync + 'static,
@@ -610,104 +633,69 @@ impl Repo {
             "local_peer_id",
             self.inner.lock().unwrap().hub.peer_id().to_string(),
         );
+        let mut inner = self.inner.lock().unwrap();
         let DispatchedCommand { command_id, event } = HubEvent::create_connection(direction);
-        let (tx, rx) = oneshot::channel();
-        self.inner
-            .lock()
-            .unwrap()
-            .pending_commands
-            .insert(command_id, tx);
-        self.inner.lock().unwrap().handle_event(event);
+        let (tx_result, mut rx_result) = oneshot::channel();
+        inner.pending_commands.insert(command_id, tx_result);
+        inner.handle_event(event);
+        let connection_id = match rx_result.try_recv() {
+            Ok(None) => panic!("CreateConnection command should complete immediately"),
+            Ok(Some(CommandResult::CreateConnection { connection_id })) => connection_id,
+            Ok(other) => panic!(
+                "unexpected command result {:?} for create connection",
+                other
+            ),
+            Err(_) => return Err(Stopped),
+        };
 
-        let inner = self.inner.clone();
-        async move {
-            let connection_id = match rx.await {
-                Ok(CommandResult::CreateConnection { connection_id }) => connection_id,
-                Ok(other) => panic!("unexpected command result for create connection: {other:?}"),
-                Err(_) => return ConnFinishedReason::Shutdown,
-            };
+        let stream =
+            stream.map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync + 'static>);
+        let sink = sink
+            .sink_map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync + 'static>);
 
-            let mut rx = {
-                let mut rx = inner
-                    .lock()
-                    .unwrap()
-                    .connections
-                    .get_mut(&connection_id)
-                    .map(|ConnHandle { rx, .. }| rx.take())
-                    .expect("connection not found");
-                rx.take().expect("receive end not found")
-            };
+        let conn_handle = inner
+            .connections
+            .get(&connection_id)
+            .expect("connection not found")
+            .clone();
 
-            let mut stream = stream.fuse();
-            let result = loop {
-                futures::select! {
-                    next_inbound_msg = stream.next() => {
-                        if let Some(msg) = next_inbound_msg {
-                            match msg {
-                                Ok(msg) => {
-                                    let DispatchedCommand { event, .. } = HubEvent::receive(connection_id, msg);
-                                    inner.lock().unwrap().handle_event(event);
-                                }
-                                Err(e) => {
-                                    tracing::error!(err=?e, "error receiving, closing connection");
-                                    break ConnFinishedReason::ErrorReceiving(e.to_string());
-                                }
-                            }
-                        } else {
-                            tracing::debug!("stream closed, closing connection");
-                            break ConnFinishedReason::TheyDisconnected;
-                        }
-                    },
-                    next_outbound = rx.next() => {
-                        if let Some(next_outbound) = next_outbound {
-                            if let Err(e) = sink.send(next_outbound).await {
-                                tracing::error!(err=?e, "error sending, closing connection");
-                                break ConnFinishedReason::ErrorSending(e.to_string());
-                            }
-                        } else {
-                            tracing::debug!(?connection_id, "connection closing");
-                            break ConnFinishedReason::WeDisconnected;
-                        }
-                    }
-                }
-            };
-            if !(result == ConnFinishedReason::WeDisconnected) {
-                let event = HubEvent::connection_lost(connection_id);
-                inner.lock().unwrap().handle_event(event);
-            }
-            if let Err(e) = sink.close().await {
-                tracing::error!(err=?e, "error closing sink");
-            }
-            result
-        }
+        let loop_task = IoLoopTask::DriveConnection(DriveConnectionTask {
+            conn_handle: conn_handle.clone(),
+            stream: stream.boxed(),
+            sink: Box::pin(sink),
+        });
+        inner.tx_io.unbounded_send(loop_task).map_err(|_| Stopped)?;
+
+        Ok(Connection::new(conn_handle))
     }
 
     /// Wait for some connection to be established with the given remote peer ID
     ///
     /// This will resolve immediately if the peer is already connected, otherwise
     /// it will resolve when a connection with the given peer ID is established.
-    pub async fn when_connected(&self, peer_id: PeerId) -> Result<ConnectionId, Stopped> {
-        let (tx, rx) = oneshot::channel();
-        {
-            let mut inner = self.inner.lock().unwrap();
+    pub fn when_connected(
+        &self,
+        peer_id: PeerId,
+    ) -> impl Future<Output = Result<Connection, Stopped>> + 'static {
+        let inner = self.inner.clone();
+        async move {
+            let rx = {
+                let mut inner = inner.lock().unwrap();
 
-            for info in inner.hub.connections() {
-                if let samod_core::network::ConnectionState::Connected { their_peer_id, .. } =
-                    info.state
-                    && their_peer_id == peer_id
-                {
-                    return Ok(info.id);
+                for conn_handle in inner.connections.values() {
+                    if conn_handle.info().map(|i| i.peer_id).as_ref() == Some(&peer_id) {
+                        return Ok(Connection::new(conn_handle.clone()));
+                    }
                 }
-            }
-            inner
-                .waiting_for_connection
-                .entry(peer_id)
-                .or_default()
-                .push(tx);
-        }
-        match rx.await {
-            Ok(id) => Ok(id),
-            Err(_) => Err(Stopped), // Stopped
+                let (tx, rx) = oneshot::channel();
+                inner
+                    .waiting_for_connection
+                    .entry(peer_id)
+                    .or_default()
+                    .push(tx);
+                rx
+            };
+            rx.await.map_err(|_| Stopped)
         }
     }
 
@@ -752,10 +740,10 @@ struct Inner {
     actors: HashMap<DocumentActorId, ActorHandle>,
     hub: Hub,
     pending_commands: HashMap<CommandId, oneshot::Sender<CommandResult>>,
-    connections: HashMap<ConnectionId, ConnHandle>,
+    connections: HashMap<ConnectionId, ConnectionHandle>,
     tx_io: UnboundedSender<io_loop::IoLoopTask>,
     tx_to_core: UnboundedSender<(DocumentActorId, DocToHubMsg)>,
-    waiting_for_connection: HashMap<PeerId, Vec<oneshot::Sender<ConnectionId>>>,
+    waiting_for_connection: HashMap<PeerId, Vec<oneshot::Sender<Connection>>>,
     stop_waiters: Vec<oneshot::Sender<()>>,
     rng: rand::rngs::StdRng,
 }
@@ -784,9 +772,8 @@ impl Inner {
             }
             if let Some(tx) = self.pending_commands.remove(&command_id) {
                 if let CommandResult::CreateConnection { connection_id } = &command {
-                    let (tx, rx) = mpsc::unbounded();
                     self.connections
-                        .insert(*connection_id, ConnHandle { tx, rx: Some(rx) });
+                        .insert(*connection_id, ConnectionHandle::new(*connection_id));
                 }
                 let _ = tx.send(command);
             } else {
@@ -797,8 +784,8 @@ impl Inner {
         for task in new_tasks {
             match task.action {
                 HubIoAction::Send { connection_id, msg } => {
-                    if let Some(ConnHandle { tx, .. }) = self.connections.get(&connection_id) {
-                        let _ = tx.unbounded_send(msg);
+                    if let Some(connhandle) = self.connections.get(&connection_id) {
+                        connhandle.send(msg);
                     } else {
                         tracing::warn!(
                             "Tried to send message on unknown connection: {:?}",
@@ -831,9 +818,12 @@ impl Inner {
                     connection_id,
                     peer_info,
                 } => {
-                    if let Some(tx) = self.waiting_for_connection.get_mut(&peer_info.peer_id) {
-                        for tx in tx.drain(..) {
-                            let _ = tx.send(connection_id);
+                    if let Some(conn_handle) = self.connections.get(&connection_id) {
+                        conn_handle.notify_handshake_complete(peer_info.clone().into());
+                        if let Some(tx) = self.waiting_for_connection.get_mut(&peer_info.peer_id) {
+                            for tx in tx.drain(..) {
+                                let _ = tx.send(Connection::new(conn_handle.clone()));
+                            }
                         }
                     }
                 }
@@ -847,7 +837,7 @@ impl Inner {
                         "connection failed, notifying waiting tasks",
                     );
                     // This will drop the sender which will in turn cause the stream handling
-                    // code in Samod::connect to finish
+                    // code in io_loop::drive_connection to emit disconnection events
                     self.connections.remove(&connection_id);
                 }
                 _ => {}

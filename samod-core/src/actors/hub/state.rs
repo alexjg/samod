@@ -324,6 +324,7 @@ impl State {
     pub(crate) fn get_local_metadata(&self) -> PeerMetadata {
         PeerMetadata {
             is_ephemeral: false,
+            storage_id: Some(self.storage_id.clone()),
         }
     }
 
