@@ -1,5 +1,28 @@
 # Changelog
 
+# 0.6.0 - 2025-12-05
+
+This release is a reasonably chunky change to the API of `samod`. Instead
+of having `Repo::connect` return a future which needs to be driven, `Repo::connect`
+now handles the connection on the runtime it was created with and returns a
+`Connection` object, which can be used to examine the connection.
+
+### Added
+
+* `Repo::connect` is now synchronous and returns a `Connection` object
+* `DocHandle::{we_have_their_changes, they_have_our_changes}` methods for 
+  waiting for sync to complete
+* `DocHandle::peers` for listening to changes to the state of peers connected
+  to a given document
+* `AutomergeUrl::document_id`
+
+### Breaking Changes
+
+* `Repo::connect` is now synchronous and returns a `Connection` object. This 
+  means that where previously you would spawn a future here, you can now just
+  call the method and forget about the connection (unless you want it for
+  some reason)
+
 ## 0.5.1 - 2025-12-02
 
 ### Added 
