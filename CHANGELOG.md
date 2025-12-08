@@ -1,6 +1,16 @@
 # Changelog
 
-# 0.6.0 - 2025-12-05
+## 0.6.1 - 2025-12-08
+
+### Added
+
+* impl `PartialEq` and `Eq` for `AutomergeUrl`
+
+### Fixed
+
+* samod: Use doc_cfg instead of doc_auto_cfg to make docs.rs build work
+
+## 0.6.0 - 2025-12-05
 
 This release is a reasonably chunky change to the API of `samod`. Instead
 of having `Repo::connect` return a future which needs to be driven, `Repo::connect`
