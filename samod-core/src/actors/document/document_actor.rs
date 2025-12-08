@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use automerge::Automerge;
+use automerge::{Automerge, ChangeHash};
 
 use super::SpawnArgs;
 // use super::driver::Driver;
@@ -156,6 +156,10 @@ impl DocumentActor {
         self.doc_state.document()
     }
 
+    fn document_mut(&mut self) -> &mut Automerge {
+        self.doc_state.document_mut()
+    }
+
     /// Provides mutable access to the document with automatic side effect handling.
     ///
     /// The closure receives a mutable reference to the Automerge document. Any modifications
@@ -166,17 +170,23 @@ impl DocumentActor {
     ///
     /// # Example
     ///
-    /// ```text
-    /// let result = actor.with_document(|doc| {
-    ///     doc.put_object(automerge::ROOT, "key", "value")
-    /// })?;
+    /// ```rust,no_run
+    /// use automerge::{AutomergeError, ObjId, transaction::Transactable, ObjType};
+    /// use samod_core::UnixTimestamp;
+    /// # let mut actor: samod_core::actors::document::DocumentActor = todo!(); // DocumentActor instance
+    /// let now = UnixTimestamp::now();
+    /// let result = actor.with_document::<_, ObjId>(now, |doc| {
+    ///     doc.transact::<_, _, AutomergeError>(|tx| {
+    ///         tx.put_object(automerge::ROOT, "key", ObjType::Text)
+    ///     }).unwrap().result
+    /// }).unwrap();
     ///
     /// // Get the closure result
-    /// let object_id = result.value?;
+    /// let object_id = result.value;
     ///
     /// // Execute any side effects
     /// for io_task in result.actor_result.io_tasks {
-    ///     storage.execute_document_io(io_task);
+    ///     // storage.execute_document_io(io_task);
     /// }
     /// ```
     #[tracing::instrument(skip(self, f), fields(local_peer_id=tracing::field::Empty))]
@@ -188,6 +198,60 @@ impl DocumentActor {
     where
         F: FnOnce(&mut Automerge) -> R,
     {
+        let mut guard = self.begin_modification()?;
+
+        let closure_result = f(guard.doc());
+
+        let actor_result = guard.commit(now);
+
+        Ok(WithDocResult::with_side_effects(
+            closure_result,
+            actor_result,
+        ))
+    }
+
+    /// Begin a modification of the document, returning a guard for safe access.
+    ///
+    /// In some scenarios it's not possible to express the modifications that
+    /// you need to make to a document using the `with_document` method. In
+    /// these cases you can use this method to obtain a guard that allows you to
+    /// modify the document directly. Once you have finished you _must_ call
+    /// `commit` on the guard to apply the changes and generate any necessary
+    /// side effects. Failure to do so will result in a panic when the guard is
+    /// dropped.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use automerge::{ROOT, AutomergeError, transaction::Transactable};
+    /// # use std::error::Error;
+    /// # use samod_core::UnixTimestamp;
+    /// # fn example() -> Result<(), Box<dyn Error>> {
+    /// # let mut actor: samod_core::actors::document::DocumentActor = todo!(); // DocumentActor instance
+    ///
+    /// let mut guard = actor.begin_modification()?;
+    ///
+    /// // Make multiple modifications to the document
+    /// guard.doc().transact::<_, _, AutomergeError>(|tx| {
+    ///     let list_id = tx.put_object(ROOT, "items", automerge::ObjType::List)?;
+    ///     tx.insert(&list_id, 0, "first item")?;
+    ///     tx.insert(&list_id, 1, "second item")?;
+    ///     Ok(())
+    /// }).unwrap();
+    ///
+    /// // Commit the changes and get the side effects
+    /// let now = UnixTimestamp::now();
+    /// let result = guard.commit(now);
+    ///
+    /// // Handle any I/O tasks that were generated
+    /// for io_task in result.io_tasks {
+    ///     // Execute the I/O task with your storage system
+    ///     // storage.execute_document_io(io_task);
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn begin_modification(&mut self) -> Result<WithDocGuard<'_>, DocumentError> {
         // Try to access the internal document
         tracing::Span::current().record("local_peer_id", self.local_peer_id.to_string());
         if !self.doc_state.is_ready() {
@@ -195,33 +259,7 @@ impl DocumentActor {
                 "document is not ready".to_string(),
             ));
         }
-        let document = self.doc_state.document_mut();
-
-        // Capture document state before modification for change detection
-        let old_heads = document.get_heads();
-
-        // Execute closure with mutable document access
-        let closure_result = f(document);
-
-        // Check if document was modified and generate side effects
-        let new_heads = document.get_heads();
-
-        // Make sure there's one turn of the loop
-        let mut actor_result = DocActorResult::new();
-        self.handle_input(now, ActorInput::Tick, &mut actor_result);
-
-        if old_heads != new_heads {
-            tracing::debug!(doc_id=%self.id, "document was modified in actor");
-            // Notify main hub that document changed
-            actor_result
-                .change_events
-                .push(DocumentChanged { new_heads });
-        }
-
-        Ok(WithDocResult::with_side_effects(
-            closure_result,
-            actor_result,
-        ))
+        Ok(WithDocGuard::new(self))
     }
 
     pub fn broadcast(&mut self, _now: UnixTimestamp, msg: Vec<u8>) -> DocActorResult {
@@ -431,5 +469,81 @@ impl DocumentActor {
     fn remove_connection(&mut self, conn_id: ConnectionId) {
         self.peer_connections.remove(&conn_id);
         self.doc_state.remove_connection(conn_id);
+    }
+}
+
+enum DocGuardState<'a> {
+    Modifying {
+        actor: &'a mut DocumentActor,
+        old_heads: Vec<ChangeHash>,
+    },
+    Complete,
+}
+
+/// The guard returned by [`DocumentActor::begin_modification`]
+///
+/// This guard provides mutable access to the document. Once you have finished
+/// modifying you MUST call [`commit`](WithDocGuard::commit), otherwise a panic
+/// will occur when the guard is dropped.
+pub struct WithDocGuard<'a> {
+    state: DocGuardState<'a>,
+}
+
+impl<'a> WithDocGuard<'a> {
+    fn new(doc: &'a mut DocumentActor) -> Self {
+        let old_heads = doc.document().get_heads();
+        Self {
+            state: DocGuardState::Modifying {
+                actor: doc,
+                old_heads,
+            },
+        }
+    }
+
+    /// Returns a mutable reference to the Automerge document.
+    pub fn doc(&mut self) -> &mut Automerge {
+        match &mut self.state {
+            DocGuardState::Modifying {
+                actor,
+                old_heads: _,
+            } => actor.document_mut(),
+            DocGuardState::Complete => panic!("Document is already committed"),
+        }
+    }
+
+    /// Commits the modifications made to the document and returns any side effects.
+    pub fn commit(mut self, now: UnixTimestamp) -> DocActorResult {
+        let mut out = DocGuardState::Complete;
+        std::mem::swap(&mut self.state, &mut out);
+        let (actor, old_heads) = match out {
+            DocGuardState::Modifying { actor, old_heads } => (actor, old_heads),
+            DocGuardState::Complete => {
+                // Should never happen as this method takes ownership of the guard
+                unreachable!()
+            }
+        };
+        // Check if document was modified and generate side effects
+        let new_heads = actor.document().get_heads();
+
+        // Make sure there's one turn of the loop
+        let mut actor_result = DocActorResult::new();
+        actor.handle_input(now, ActorInput::Tick, &mut actor_result);
+
+        if old_heads != new_heads {
+            tracing::debug!(doc_id=%actor.document_id(), "document was modified in actor");
+            // Notify main hub that document changed
+            actor_result
+                .change_events
+                .push(DocumentChanged { new_heads });
+        }
+        actor_result
+    }
+}
+
+impl<'a> Drop for WithDocGuard<'a> {
+    fn drop(&mut self) {
+        if let DocGuardState::Modifying { .. } = &mut self.state {
+            panic!("WithDocGuard dropped without comitting");
+        }
     }
 }
