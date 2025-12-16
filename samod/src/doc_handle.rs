@@ -30,6 +30,14 @@ pub struct DocHandle {
     document_id: DocumentId,
 }
 
+impl std::fmt::Debug for DocHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DocHandle")
+            .field("document_id", &self.document_id)
+            .finish()
+    }
+}
+
 impl DocHandle {
     pub(crate) fn new(doc_id: DocumentId, inner: Arc<Mutex<DocActorInner>>) -> Self {
         Self {
