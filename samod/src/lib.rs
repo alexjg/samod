@@ -401,6 +401,13 @@ pub struct Repo {
     inner: Arc<Mutex<Inner>>,
 }
 
+impl std::fmt::Debug for Repo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Repo")
+            .finish()
+    }
+}
+
 impl Repo {
     // Create a new [`RepoBuilder`] which will build a [`Repo`] that spawns its
     // tasks onto the provided runtime
