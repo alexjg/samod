@@ -427,3 +427,83 @@ async fn they_have_our_changes_smoke() {
     // The flag should have been flipped
     assert!(alice_has_changes.load(Ordering::SeqCst));
 }
+
+#[cfg(feature = "tokio")]
+#[tokio::test]
+async fn connected_peers_smoke() {
+    use std::sync::{Arc, Mutex};
+
+    use samod::ConnectionState;
+
+    init_logging();
+
+    let alice = Repo::build_tokio()
+        .with_peer_id(PeerId::from("alice"))
+        .load()
+        .await;
+
+    let bob = Repo::build_tokio()
+        .with_peer_id(PeerId::from("bob"))
+        .load()
+        .await;
+
+    let (init_connected, mut conn_event_stream) = alice.connected_peers();
+    assert!(init_connected.is_empty());
+
+    let conn_events = Arc::new(Mutex::new(Vec::new()));
+    tokio::spawn({
+        let conn_events = conn_events.clone();
+        async move {
+            use futures::StreamExt;
+
+            while let Some(infos) = conn_event_stream.next().await {
+                conn_events.lock().unwrap().push(infos);
+            }
+        }
+    });
+
+    // Now connect the two peers
+    tincans::connect_repos(&alice, &bob);
+
+    // Wait for the connection to complete on Alice
+    let conn = alice.when_connected(bob.peer_id()).await.unwrap();
+
+    // Now we should have a bunch of connection events recorded
+    assert!(!conn_events.lock().unwrap().is_empty());
+
+    // The first event should be the existence of a new handshaking connection
+    let first = conn_events.lock().unwrap().get(0).unwrap().clone();
+    let bob_info = first.iter().find(|info| info.id == conn.id()).unwrap();
+    assert_eq!(bob_info.state, ConnectionState::Handshaking);
+
+    // The next event should be the completion of the handshake
+    let second = conn_events.lock().unwrap().get(1).unwrap().clone();
+    let bob_info = second.iter().find(|info| info.id == conn.id()).unwrap();
+    assert_eq!(
+        bob_info.state,
+        ConnectionState::Connected {
+            their_peer_id: bob.peer_id().clone()
+        }
+    );
+
+    // Now create a document on Alice and ensure that Bob can find it
+    let alice_handle = alice.create(Automerge::new()).await.unwrap();
+
+    let bob_handle = bob
+        .find(alice_handle.document_id().clone())
+        .await
+        .unwrap()
+        .unwrap();
+
+    let alice_conn = bob.when_connected(alice.peer_id()).await.unwrap();
+    bob_handle.we_have_their_changes(alice_conn.id()).await;
+
+    // Now get the last event received
+    let last = conn_events.lock().unwrap().last().unwrap().clone();
+    let bob_info = last.iter().find(|info| info.id == conn.id()).unwrap();
+    let doc_info = bob_info.docs.get(bob_handle.document_id()).unwrap();
+    assert_eq!(
+        doc_info.their_heads,
+        Some(alice_handle.with_document(|d| d.get_heads()))
+    );
+}

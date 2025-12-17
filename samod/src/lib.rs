@@ -403,8 +403,7 @@ pub struct Repo {
 
 impl std::fmt::Debug for Repo {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Repo")
-            .finish()
+        f.debug_struct("Repo").finish()
     }
 }
 
@@ -711,16 +710,23 @@ impl Repo {
         self.inner.lock().unwrap().hub.peer_id().clone()
     }
 
-    pub async fn connected_peers(&self) -> Vec<ConnectionInfo> {
-        self.inner
-            .lock()
-            .unwrap()
+    pub fn connected_peers(
+        &self,
+    ) -> (
+        Vec<ConnectionInfo>,
+        impl Stream<Item = Vec<ConnectionInfo>> + Unpin + 'static,
+    ) {
+        let (tx_events, rx_events) = unbounded::channel();
+        let mut inner = self.inner.lock().unwrap();
+        inner.conn_listeners.push(tx_events);
+        let now = inner
             .hub
             .connections()
             .clone()
             .into_iter()
             .map(|c| c.into())
-            .collect()
+            .collect();
+        (now, rx_events)
     }
 
     /// Stop the `Samod` instance.
@@ -748,6 +754,7 @@ struct Inner {
     hub: Hub,
     pending_commands: HashMap<CommandId, oneshot::Sender<CommandResult>>,
     connections: HashMap<ConnectionId, ConnectionHandle>,
+    conn_listeners: Vec<unbounded::UnboundedSender<Vec<ConnectionInfo>>>,
     tx_io: UnboundedSender<io_loop::IoLoopTask>,
     tx_to_core: UnboundedSender<(DocumentActorId, DocToHubMsg)>,
     waiting_for_connection: HashMap<PeerId, Vec<oneshot::Sender<Connection>>>,
@@ -817,6 +824,14 @@ impl Inner {
             } else {
                 tracing::warn!(?actor_id, "received message for unknown actor");
             }
+        }
+
+        if !connection_events.is_empty() && !self.conn_listeners.is_empty() {
+            let new_infos = self.hub.connections();
+            self.conn_listeners.retain(|tx| {
+                tx.unbounded_send(new_infos.clone().into_iter().map(|c| c.into()).collect())
+                    .is_ok()
+            });
         }
 
         for evt in connection_events {
@@ -1018,6 +1033,7 @@ impl TaskSetup {
             hub: *hub,
             pending_commands: HashMap::new(),
             connections: HashMap::new(),
+            conn_listeners: Vec::new(),
             tx_io: tx_storage,
             tx_to_core,
             waiting_for_connection: HashMap::new(),
