@@ -601,8 +601,11 @@ impl Repo {
         io: Io,
         direction: ConnDirection,
     ) -> Result<Connection, Stopped> {
+        let codec = tokio_util::codec::LengthDelimitedCodec::builder()
+            // 8gb instead of 8mb lol
+            .max_frame_length(8 * 1024 * 1024 * 1024);
         let framed =
-            tokio_util::codec::Framed::new(io, tokio_util::codec::LengthDelimitedCodec::new());
+            tokio_util::codec::Framed::new(io, codec.new_codec());
         let (write_half, read_half) = framed.split();
         let write_half = write_half
             .with::<Vec<u8>, _, _, std::io::Error>(|msg| std::future::ready(Ok(msg.into())));
