@@ -11,14 +11,14 @@ license = "MIT"
 base64 = "0.21"
 tracing = "0.1.41"
 uuid = { version = "1.0", features = ["v4", "serde"] }
-rand = "0.9"
+rand = "0.9.2"
 automerge = { workspace = true }
 serde = { version = "1.0", features = ["derive"] }
 hex = "0.4"
 minicbor = { version = "1.0.0", features = ["std"] }
 thiserror = "2.0.12"
-bs58 = { version = "0.5.1", features = ["check"] }
-sha2 = "0.10.9"
+b58 = "0.1.2"
+sha2 = "0.11.0-rc.3"
 
 [lib]
 
