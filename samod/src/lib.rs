@@ -708,6 +708,11 @@ impl Repo {
         self.inner.lock().unwrap().hub.peer_id().clone()
     }
 
+    /// Get the currently connected peers and a stream of changes to the connected peers
+    ///
+    /// The returned stream will be the entire state of the connected peers,
+    /// emitted whenever any part of that state changes (such as when new peers
+    /// are added, or a new message is sent)
     pub fn connected_peers(
         &self,
     ) -> (
