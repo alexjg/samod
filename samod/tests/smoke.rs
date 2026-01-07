@@ -472,7 +472,7 @@ async fn connected_peers_smoke() {
     assert!(!conn_events.lock().unwrap().is_empty());
 
     // The first event should be the existence of a new handshaking connection
-    let first = conn_events.lock().unwrap().get(0).unwrap().clone();
+    let first = conn_events.lock().unwrap().first().unwrap().clone();
     let bob_info = first.iter().find(|info| info.id == conn.id()).unwrap();
     assert_eq!(bob_info.state, ConnectionState::Handshaking);
 
