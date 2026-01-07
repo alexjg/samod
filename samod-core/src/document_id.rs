@@ -25,14 +25,14 @@ impl DocumentId {
 
 impl std::fmt::Debug for DocumentId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let as_string = b58::encode(&self.as_bytes()).to_string();
+        let as_string = b58::encode(self.as_bytes()).to_string();
         write!(f, "{as_string}")
     }
 }
 
 impl std::fmt::Display for DocumentId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let as_string = b58::encode(&self.as_bytes()).to_string();
+        let as_string = b58::encode(self.as_bytes()).to_string();
         write!(f, "{as_string}")
     }
 }
