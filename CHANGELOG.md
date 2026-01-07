@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.7.0 - 2026-01-07
+
+### Breaking Changes
+
+* `Repo::connected_peers` now returns a stream of changes to the connected
+  peers, as well as the currently connected peers. This makes it possible to
+  track changes to connected peers consistently
+
+### Fixed
+
+* Fixed a deadlock when using ConcurrencyConfig::Threadpool and loading more
+  documents than threads in the pool
+
 ## 0.6.1 - 2025-12-08
 
 ### Added

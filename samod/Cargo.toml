@@ -1,6 +1,6 @@
 [package]
 name = "samod"
-version = "0.6.1"
+version = "0.7.0"
 edition = "2024"
 authors = ["Alex Good <alex@patternist.xyz>"]
 description = "A rust library for managing automerge documents, compatible with the js automerge-repo library"
@@ -22,7 +22,7 @@ chrono = "0.4.41"
 futures = "0.3.31"
 rand = "0.9.1"
 rayon = { version = "1.10.0", optional = true }
-samod-core = { path = "../samod-core", version = "0.6.1" }
+samod-core = { path = "../samod-core", version = "0.7.0" }
 tokio = { version = "1.46.0", features = ["rt", "time", "fs"], optional = true }
 tokio-tungstenite = { version = "0.27.0", optional = true }
 tokio-util = { version = "0.7.15", features = [
