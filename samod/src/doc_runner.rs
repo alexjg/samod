@@ -1,4 +1,7 @@
-use std::sync::{Arc, Mutex};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+};
 
 use samod_core::{DocumentActorId, DocumentId, actors::document::DocActorResult};
 
@@ -13,8 +16,13 @@ pub(crate) enum DocRunner {
     /// Run the actors on a threadpool
     #[cfg(feature = "threadpool")]
     Threadpool(rayon::ThreadPool),
-    /// Run the actors on an async task which is listening on the other end of `tx`
-    Async { tx: UnboundedSender<SpawnedActor> },
+    /// Run the actors on an async task which is listening on the other end of `tx_spawn`
+    Async {
+        /// Channel to send newly spawned actors to the async runner
+        tx_spawn: UnboundedSender<SpawnedActor>,
+        /// Channels to send tasks to individual actors (keyed by actor ID)
+        task_senders: HashMap<DocumentActorId, UnboundedSender<ActorTask>>,
+    },
 }
 
 pub(crate) struct SpawnedActor {

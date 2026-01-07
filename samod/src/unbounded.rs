@@ -26,11 +26,6 @@ impl<T> Clone for UnboundedSender<T> {
 pub(crate) struct UnboundedReceiver<T>(async_channel::Receiver<T>);
 
 impl<T> UnboundedReceiver<T> {
-    #[cfg(feature = "threadpool")]
-    pub(crate) fn recv_blocking(&self) -> Result<T, async_channel::RecvError> {
-        self.0.recv_blocking()
-    }
-
     pub(crate) async fn recv(&self) -> Result<T, async_channel::RecvError> {
         self.0.recv().await
     }
