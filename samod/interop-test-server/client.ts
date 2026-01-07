@@ -107,20 +107,21 @@ const receiveEphemeral = command({
       description: "The document url to fetch",
     }),
   },
-  handler: ({ port, docUrl }) => {
+  handler: async ({ port, docUrl }) => {
     const repo = new Repo({
       network: [new BrowserWebSocketClientAdapter(`ws://localhost:${port}`)],
     });
     if (!isValidAutomergeUrl(docUrl)) {
       throw new Error("Invalid docUrl");
     }
-    const doc = repo.find(docUrl);
     repo.find(docUrl).then((doc) => {
       doc.on("ephemeral-message", ({ message }) => {
         if (typeof message === "object" && "message" in message) {
           console.log(message.message);
         }
       });
+      // Signal that we're ready to receive ephemeral messages
+      console.log("ready");
     });
   },
 });

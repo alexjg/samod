@@ -184,6 +184,24 @@ impl JsWrapper {
         )
         .await?;
 
+        // Wait for the "ready" signal before returning - this ensures the JS client
+        // has connected, synced the document, and set up the ephemeral listener
+        let first_line = proc
+            .stdout
+            .as_mut()
+            .unwrap()
+            .next()
+            .await
+            .ok_or_else(|| eyre::eyre!("No output from receive-ephemeral client"))?
+            .map_err(|e| eyre::eyre!("Error reading from receive-ephemeral client: {}", e))?;
+
+        if first_line != "ready" {
+            return Err(eyre::eyre!(
+                "Expected 'ready' from receive-ephemeral client, got: {}",
+                first_line
+            ));
+        }
+
         Ok(JsEphemera {
             _child: proc.child,
             stdout: proc.stdout.take().unwrap(),
