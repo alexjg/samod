@@ -17,9 +17,8 @@ use samod_core::{
 };
 
 use crate::{
-    ActorHandle, ConnFinishedReason, Inner, actor_task::ActorTask,
-    announce_policy::LocalAnnouncePolicy, connection::ConnectionHandle, storage::LocalStorage,
-    unbounded::UnboundedReceiver,
+    ConnFinishedReason, Inner, actor_task::ActorTask, announce_policy::LocalAnnouncePolicy,
+    connection::ConnectionHandle, storage::LocalStorage, unbounded::UnboundedReceiver,
 };
 
 #[derive(Debug)]
@@ -103,11 +102,7 @@ pub(crate) async fn io_loop<S: LocalStorage, A: LocalAnnouncePolicy>(
             result = running_storage_tasks.select_next_some() => {
                 let StorageTaskComplete { actor_id, result } = result;
                 let inner = inner.lock().unwrap();
-                let Some(ActorHandle{tx,.. }) = inner.actors.get(&actor_id) else {
-                    tracing::warn!(?actor_id, "received io result for unknown actor");
-                    continue;
-                };
-                let _ = tx.unbounded_send(ActorTask::IoComplete(result));
+                inner.dispatch_task(actor_id, ActorTask::IoComplete(result));
             },
             _ = running_connections.select_next_some() => {
 
@@ -117,11 +112,7 @@ pub(crate) async fn io_loop<S: LocalStorage, A: LocalAnnouncePolicy>(
 
     while let Some(StorageTaskComplete { result, actor_id }) = running_storage_tasks.next().await {
         let inner = inner.lock().unwrap();
-        let Some(ActorHandle { tx, .. }) = inner.actors.get(&actor_id) else {
-            tracing::warn!(?actor_id, "received io result for unknown actor");
-            continue;
-        };
-        let _ = tx.unbounded_send(ActorTask::IoComplete(result));
+        inner.dispatch_task(actor_id, ActorTask::IoComplete(result));
     }
 }
 

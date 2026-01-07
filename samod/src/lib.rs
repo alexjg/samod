@@ -87,7 +87,7 @@
 //! use samod::ConnDirection;
 //! use futures::{StreamExt, channel::mpsc};
 //! use std::convert::Infallible;
-//! 
+//!
 //! # #[cfg(feature="tokio")]
 //! tokio_test::block_on(async {
 //! let alice = samod::Repo::build_tokio().load().await;
@@ -401,8 +401,7 @@ pub struct Repo {
 
 impl std::fmt::Debug for Repo {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Repo")
-            .finish()
+        f.debug_struct("Repo").finish()
     }
 }
 
@@ -754,6 +753,34 @@ struct Inner {
 }
 
 impl Inner {
+    /// Dispatch a task to a document actor.
+    ///
+    /// In async mode, this sends the task via the actor's channel stored in DocRunner.
+    /// In threadpool mode, this spawns the task directly on the threadpool.
+    fn dispatch_task(&self, actor_id: DocumentActorId, task: ActorTask) {
+        match &self.doc_runner {
+            #[cfg(feature = "threadpool")]
+            DocRunner::Threadpool(threadpool) => {
+                let Some(actor_handle) = self.actors.get(&actor_id) else {
+                    tracing::warn!(?actor_id, "received task for unknown actor");
+                    return;
+                };
+                let inner = actor_handle.inner.clone();
+                threadpool.spawn(move || {
+                    let mut guard = inner.lock().unwrap();
+                    guard.handle_task(task);
+                });
+            }
+            DocRunner::Async { task_senders, .. } => {
+                let Some(tx) = task_senders.get(&actor_id) else {
+                    tracing::warn!(?actor_id, "received task for unknown actor");
+                    return;
+                };
+                let _ = tx.unbounded_send(task);
+            }
+        }
+    }
+
     #[tracing::instrument(skip(self, event), fields(local_peer_id=%self.hub.peer_id()))]
     fn handle_event(&mut self, event: HubEvent) {
         let now = UnixTimestamp::now();
@@ -810,11 +837,7 @@ impl Inner {
         }
 
         for (actor_id, actor_msg) in actor_messages {
-            if let Some(ActorHandle { tx, .. }) = self.actors.get(&actor_id) {
-                let _ = tx.unbounded_send(ActorTask::HandleMessage(actor_msg));
-            } else {
-                tracing::warn!(?actor_id, "received message for unknown actor");
-            }
+            self.dispatch_task(actor_id, ActorTask::HandleMessage(actor_msg));
         }
 
         for evt in connection_events {
@@ -858,7 +881,6 @@ impl Inner {
 
     #[tracing::instrument(skip(self, args))]
     fn spawn_actor(&mut self, args: SpawnArgs) {
-        let (tx, rx) = unbounded::channel();
         let actor_id = args.actor_id();
         let doc_id = args.document_id().clone();
         let (actor, init_results) = DocumentActor::new(UnixTimestamp::now(), args);
@@ -875,31 +897,28 @@ impl Inner {
             actor_id,
             ActorHandle {
                 inner: doc_inner.clone(),
-                tx,
                 doc: handle,
             },
         );
 
         match &mut self.doc_runner {
             #[cfg(feature = "threadpool")]
-            DocRunner::Threadpool(threadpool) => {
-                let span = tracing::Span::current();
-                threadpool.spawn(move || {
-                    let _enter = span.enter();
-                    doc_inner.lock().unwrap().handle_results(init_results);
-
-                    while let Ok(actor_task) = rx.recv_blocking() {
-                        let mut inner = doc_inner.lock().unwrap();
-                        inner.handle_task(actor_task);
-                        if inner.is_stopped() {
-                            tracing::debug!(?doc_id, ?actor_id, "actor stopped");
-                            break;
-                        }
-                    }
-                });
+            DocRunner::Threadpool(_threadpool) => {
+                // In threadpool mode, we process init_results synchronously and then
+                // dispatch subsequent tasks via dispatch_task() which spawns them
+                // directly on the threadpool. This avoids dedicating one thread per
+                // document, which would limit the number of documents to the thread count.
+                doc_inner.lock().unwrap().handle_results(init_results);
             }
-            DocRunner::Async { tx } => {
-                if tx
+            DocRunner::Async {
+                tx_spawn,
+                task_senders,
+            } => {
+                // Create channel for this actor and store the sender
+                let (tx, rx) = unbounded::channel();
+                task_senders.insert(actor_id, tx);
+
+                if tx_spawn
                     .unbounded_send(SpawnedActor {
                         doc_id,
                         actor_id,
@@ -1006,7 +1025,10 @@ impl TaskSetup {
             ConcurrencyConfig::AsyncRuntime => {
                 let (tx, rx) = unbounded::channel();
                 rx_actor = Some(rx);
-                DocRunner::Async { tx }
+                DocRunner::Async {
+                    tx_spawn: tx,
+                    task_senders: HashMap::new(),
+                }
             }
         };
 
