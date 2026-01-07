@@ -84,11 +84,11 @@
 //! transport. We create two repos and connect them with these channels.
 //!
 //! ```rust
-//! # #[cfg(feature="tokio")]
 //! use samod::ConnDirection;
 //! use futures::{StreamExt, channel::mpsc};
 //! use std::convert::Infallible;
-//!
+//! 
+//! # #[cfg(feature="tokio")]
 //! tokio_test::block_on(async {
 //! let alice = samod::Repo::build_tokio().load().await;
 //! let bob = samod::Repo::build_tokio().load().await;
@@ -241,9 +241,7 @@
 //! # tokio_test::block_on(async {
 //! use automerge::{ReadDoc, transaction::{Transactable as _}};
 //! use futures::StreamExt as _;
-//!
 //! use samod::ConnDirection;
-//!
 //! use std::convert::Infallible;
 //!
 //! # let _ = tracing_subscriber::fmt().try_init();
