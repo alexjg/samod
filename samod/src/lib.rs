@@ -860,14 +860,6 @@ impl Inner {
             });
         }
 
-        if !connection_events.is_empty() && !self.conn_listeners.is_empty() {
-            let new_infos = self.hub.connections();
-            self.conn_listeners.retain(|tx| {
-                tx.unbounded_send(new_infos.clone().into_iter().map(|c| c.into()).collect())
-                    .is_ok()
-            });
-        }
-
         for evt in connection_events {
             match evt {
                 ConnectionEvent::HandshakeCompleted {
