@@ -1,6 +1,6 @@
 [package]
 name = "samod"
-version = "0.7.0"
+version = "0.7.1"
 edition = "2024"
 authors = ["Alex Good <alex@patternist.xyz>"]
 description = "A rust library for managing automerge documents, compatible with the js automerge-repo library"
