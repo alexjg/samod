@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.7.1 - 2026-01-08
+
+### Fixed
+
+* There was a bug where document larger than 8Mb wouldn't sync due to a size
+  limit in the length delimited codec used in `Repo::connect_tokio_io`. This
+  has been fixed by increasing the limit
+
 ## 0.7.0 - 2026-01-07
 
 ### Breaking Changes
