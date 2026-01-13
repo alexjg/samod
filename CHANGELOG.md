@@ -1,5 +1,12 @@
 # Changelog
 
+## samod-core: 0.7.1 - 2026-01-13
+
+### Added
+
+* Added `DocumentActor::begin_modification` method for modification patterns
+  which can't be expressed using a callback
+
 ## 0.7.1 - 2026-01-08
 
 ### Fixed
