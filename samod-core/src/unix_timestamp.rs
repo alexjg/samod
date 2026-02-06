@@ -22,11 +22,20 @@ impl std::fmt::Debug for UnixTimestamp {
 
 impl UnixTimestamp {
     pub fn now() -> Self {
-        Self {
-            millis: SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_millis(),
+        #[cfg(target_arch = "wasm32")]
+        {
+            Self {
+                millis: js_sys::Date::now() as u128,
+            }
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            Self {
+                millis: SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_millis(),
+            }
         }
     }
 
