@@ -320,8 +320,12 @@ impl DocumentActor {
                             self.load_state
                                 .handle_result(io_result.task_id, storage_result);
                         } else if self.on_disk_state.has_task(io_result.task_id) {
-                            self.on_disk_state
-                                .task_complete(io_result.task_id, storage_result);
+                            if let Some(persisted_heads) = self
+                                .on_disk_state
+                                .task_complete(io_result.task_id, storage_result)
+                            {
+                                out.emit_doc_persisted(persisted_heads);
+                            }
                         } else {
                             panic!("unexpected storage result");
                         }

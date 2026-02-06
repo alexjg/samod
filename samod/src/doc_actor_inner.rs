@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use automerge::Automerge;
 use futures::{Stream, channel::mpsc};
 use samod_core::{
-    ConnectionId, DocumentActorId, DocumentChanged, DocumentId, UnixTimestamp,
+    ConnectionId, DocumentActorId, DocumentChanged, DocumentId, DocumentPersisted, UnixTimestamp,
     actors::{
         DocToHubMsg,
         document::{DocActorResult, DocumentActor, WithDocResult},
@@ -24,6 +24,7 @@ pub(crate) struct DocActorInner {
     tx_io: UnboundedSender<io_loop::IoLoopTask>,
     ephemera_listeners: Vec<mpsc::UnboundedSender<Vec<u8>>>,
     change_listeners: Vec<mpsc::UnboundedSender<DocumentChanged>>,
+    persisted_listeners: Vec<mpsc::UnboundedSender<DocumentPersisted>>,
     peer_state_change_listeners: Vec<mpsc::UnboundedSender<HashMap<ConnectionId, PeerDocState>>>,
     actor: DocumentActor,
 }
@@ -43,6 +44,7 @@ impl DocActorInner {
             tx_io,
             ephemera_listeners: Vec::new(),
             change_listeners: Vec::new(),
+            persisted_listeners: Vec::new(),
             peer_state_change_listeners: Vec::new(),
             actor,
         }
@@ -78,6 +80,14 @@ impl DocActorInner {
         rx
     }
 
+    pub(crate) fn create_persisted_listener(
+        &mut self,
+    ) -> mpsc::UnboundedReceiver<DocumentPersisted> {
+        let (tx, rx) = mpsc::unbounded();
+        self.persisted_listeners.push(tx);
+        rx
+    }
+
     pub(crate) fn broadcast_ephemeral_message(&mut self, message: Vec<u8>) {
         let result = self.actor.broadcast(UnixTimestamp::now(), message);
         self.handle_results(result);
@@ -89,6 +99,7 @@ impl DocActorInner {
             outgoing_messages,
             ephemeral_messages,
             change_events,
+            persisted_events,
             stopped: _,
             peer_state_changes,
         } = results;
@@ -125,6 +136,17 @@ impl DocActorInner {
             self.change_listeners.retain_mut(|listener| {
                 for change in &change_events {
                     if listener.unbounded_send(change.clone()).is_err() {
+                        return false;
+                    }
+                }
+                true
+            });
+        }
+
+        if !persisted_events.is_empty() {
+            self.persisted_listeners.retain_mut(|listener| {
+                for event in &persisted_events {
+                    if listener.unbounded_send(event.clone()).is_err() {
                         return false;
                     }
                 }
