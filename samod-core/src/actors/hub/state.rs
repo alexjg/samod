@@ -1,20 +1,23 @@
 use std::collections::HashMap;
 
 use crate::{
-    ConnectionId, DocumentActorId, DocumentId, PeerId, StorageId, UnixTimestamp,
+    ConnectionId, DialerId, DocumentActorId, DocumentId, ListenerId, PeerId, StorageId,
+    UnixTimestamp,
     actors::{
         document::{DocumentStatus, SpawnArgs},
         hub::{
             Command, HubEvent, HubEventPayload, HubInput, HubResults,
             connection::{ConnectionArgs, ReceiveEvent},
+            dialer::{ConnectionLostOutcome, DialerState},
             io::{HubIoAction, HubIoResult},
+            listener::ListenerState,
         },
         messages::{Broadcast, DocMessage, DocToHubMsgPayload, HubToDocMsgPayload},
     },
     ephemera::{EphemeralMessage, EphemeralSession, OutgoingSessionDetails},
     network::{
-        ConnDirection, ConnectionEvent, ConnectionInfo, ConnectionState, PeerDocState, PeerInfo,
-        PeerMetadata,
+        ConnDirection, ConnectionEvent, ConnectionInfo, ConnectionOwner, ConnectionState,
+        DialRequest, DialerEvent, PeerDocState, PeerInfo, PeerMetadata,
         wire_protocol::{WireMessage, WireMessageBuilder},
     },
 };
@@ -28,11 +31,6 @@ mod pending_commands;
 
 pub(crate) struct State {
     /// The storage ID that identifies this peer's storage layer.
-    ///
-    /// This ID identifies the storage layer that this peer is connected to.
-    /// Multiple peers may share the same storage ID when they're connected to
-    /// the same underlying storage (e.g., tabs sharing IndexedDB, processes
-    /// sharing filesystem storage).
     pub(crate) storage_id: StorageId,
 
     /// The unique peer ID for this samod instance.
@@ -53,6 +51,12 @@ pub(crate) struct State {
     ephemeral_session: EphemeralSession,
 
     run_state: RunState,
+
+    /// Registered dialers (outgoing connections with reconnection)
+    dialers: HashMap<DialerId, DialerState>,
+
+    /// Registered listeners (incoming connections)
+    listeners: HashMap<ListenerId, ListenerState>,
 }
 
 impl State {
@@ -70,12 +74,27 @@ impl State {
             pending_commands: pending_commands::PendingCommands::new(),
             ephemeral_session,
             run_state: RunState::Running,
+            dialers: HashMap::new(),
+            listeners: HashMap::new(),
         }
     }
 
     /// Returns the current storage ID if it has been loaded.
     pub(crate) fn storage_id(&self) -> StorageId {
         self.storage_id.clone()
+    }
+
+    /// Find an existing listener for the given URL.
+    pub(crate) fn find_listener_for_url(&self, url: &url::Url) -> Option<ListenerId> {
+        self.listeners
+            .iter()
+            .find(|(_, l)| l.url == *url)
+            .map(|(id, _)| *id)
+    }
+
+    /// Returns the current attempt count for a dialer.
+    pub(crate) fn dialer_attempt(&self, dialer_id: DialerId) -> Option<u32> {
+        self.dialers.get(&dialer_id).map(|d| d.attempts)
     }
 
     pub(crate) fn add_connection(
@@ -86,8 +105,26 @@ impl State {
         self.connections.insert(connection_id, connection_state);
     }
 
-    pub(crate) fn remove_connection(&mut self, connection_id: &ConnectionId) -> Option<Connection> {
-        self.connections.remove(connection_id)
+    pub(crate) fn remove_connection(
+        &mut self,
+        results: &mut HubResults,
+        connection_id: &ConnectionId,
+    ) -> Option<Connection> {
+        let conn = self.connections.remove(connection_id)?;
+        let msg = match conn.owner() {
+            ConnectionOwner::Dialer(dialer_id) => {
+                format!("Dialer {:?} connection removed", dialer_id)
+            }
+            ConnectionOwner::Listener(listener_id) => {
+                format!("Listener {:?} connection removed", listener_id)
+            }
+        };
+        results.emit_disconnect_event(*connection_id, conn.owner(), msg);
+        self.notify_doc_actors_of_removed_connection(results, *connection_id);
+        results.emit_io_action(HubIoAction::Disconnect {
+            connection_id: *connection_id,
+        });
+        Some(conn)
     }
 
     pub(crate) fn add_document_to_connection(
@@ -375,8 +412,7 @@ impl State {
                         }
                     }
                     HubInput::Tick => {
-                        // Tick events are used to trigger periodic processing
-                        // but don't spawn new command futures
+                        self.handle_tick(rng, now, results);
                     }
                     HubInput::ActorMessage { actor_id, message } => match message {
                         DocToHubMsgPayload::DocumentStatusChanged { new_status } => {
@@ -417,13 +453,39 @@ impl State {
                         }
                     },
                     HubInput::ConnectionLost { connection_id } => {
-                        if let Some(_connection) = self.remove_connection(&connection_id) {
-                            results.emit_disconnect_event(
-                                connection_id,
-                                "Connection lost externally".to_string(),
-                            );
-                            self.notify_doc_actors_of_removed_connection(results, connection_id);
-                        }
+                        self.handle_connection_lost(rng, now, results, connection_id);
+                    }
+                    HubInput::AddDialer { command_id, config } => {
+                        let result = self.handle_add_dialer(results, config);
+                        results.completed_commands.insert(command_id, result);
+                    }
+                    HubInput::AddListener { command_id, config } => {
+                        let result = self.handle_add_listener(config);
+                        results.completed_commands.insert(command_id, result);
+                    }
+                    HubInput::CreateDialerConnection {
+                        command_id,
+                        dialer_id,
+                    } => {
+                        let result = self.handle_create_dialer_connection(now, results, dialer_id);
+                        results.completed_commands.insert(command_id, result);
+                    }
+                    HubInput::CreateListenerConnection {
+                        command_id,
+                        listener_id,
+                    } => {
+                        let result =
+                            self.handle_create_listener_connection(now, results, listener_id);
+                        results.completed_commands.insert(command_id, result);
+                    }
+                    HubInput::DialFailed { dialer_id, error } => {
+                        self.handle_dial_failed(rng, now, results, dialer_id, &error);
+                    }
+                    HubInput::RemoveDialer { dialer_id } => {
+                        self.handle_remove_dialer(results, dialer_id);
+                    }
+                    HubInput::RemoveListener { listener_id } => {
+                        self.handle_remove_listener(results, listener_id);
                     }
                 }
             }
@@ -458,10 +520,14 @@ impl State {
         // things like the last time we sent a message and the heads of each document according
         // to the connection and so on).
         for (conn_id, new_state) in self.pop_new_connection_info() {
-            results.emit_connection_event(ConnectionEvent::StateChanged {
-                connection_id: conn_id,
-                new_state,
-            });
+            if let Some(conn) = self.connections.get(&conn_id) {
+                let owner = conn.owner();
+                results.emit_connection_event(ConnectionEvent::StateChanged {
+                    connection_id: conn_id,
+                    owner,
+                    new_state,
+                });
+            }
         }
 
         for (command_id, result) in self.pop_completed_commands() {
@@ -491,9 +557,6 @@ impl State {
         command: Command,
     ) -> Option<CommandResult> {
         match command {
-            Command::CreateConnection { direction } => {
-                Some(self.handle_create_connection(now, out, direction))
-            }
             Command::Receive { connection_id, msg } => {
                 Some(self.handle_receive(now, out, connection_id, msg))
             }
@@ -506,34 +569,6 @@ impl State {
                 self.handle_find_document(out, command_id, document_id)
             }
         }
-    }
-
-    fn handle_create_connection(
-        &mut self,
-        now: UnixTimestamp,
-        out: &mut HubResults,
-        direction: ConnDirection,
-    ) -> CommandResult {
-        let local_peer_id = self.peer_id.clone();
-        let local_metadata = self.get_local_metadata();
-
-        let connection = Connection::new_handshaking(
-            out,
-            ConnectionArgs {
-                direction,
-                local_peer_id: local_peer_id.clone(),
-                local_metadata: Some(local_metadata.clone()),
-                created_at: now,
-            },
-        );
-
-        let connection_id = connection.id();
-
-        tracing::debug!(?connection_id, ?direction, "creating new connection");
-
-        self.add_connection(connection_id, connection);
-
-        CommandResult::CreateConnection { connection_id }
     }
 
     fn handle_receive(
@@ -563,7 +598,10 @@ impl State {
                     e
                 );
                 let error_msg = format!("Message decode error: {e}");
-                self.fail_connection_with_disconnect(out, connection_id, error_msg);
+                if let Some(conn) = self.connections.get(&connection_id) {
+                    tracing::debug!(error=?error_msg, remote_peer_id=?conn.remote_peer_id(), "failing connection");
+                    self.remove_connection(out, &connection_id);
+                }
 
                 return CommandResult::Receive {
                     connection_id,
@@ -576,14 +614,25 @@ impl State {
             match evt {
                 ReceiveEvent::HandshakeComplete { remote_peer_id } => {
                     tracing::debug!(?connection_id, ?remote_peer_id, "handshake completed");
+                    // Reset backoff on successful handshake
+                    self.reset_dialer_backoff_for_connection(connection_id);
                     // Emit handshake completed event
                     let peer_info = PeerInfo {
                         peer_id: remote_peer_id.clone(),
                         metadata: Some(self.get_local_metadata()),
                         protocol_version: "1".to_string(),
                     };
+                    // The connection must exist — we just called receive_msg on
+                    // it above This is neccessary to appease the borrow checker
+                    // (i.e. we can't just use conn)
+                    let owner = self
+                        .connections
+                        .get(&connection_id)
+                        .expect("connection must exist during receive handling")
+                        .owner();
                     out.emit_connection_event(ConnectionEvent::HandshakeCompleted {
                         connection_id,
+                        owner,
                         peer_info: peer_info.clone(),
                     })
                 }
@@ -720,27 +769,6 @@ impl State {
         None
     }
 
-    fn fail_connection_with_disconnect(
-        &mut self,
-        out: &mut HubResults,
-        connection_id: crate::ConnectionId,
-        error: String,
-    ) {
-        let Some(connection) = self.remove_connection(&connection_id) else {
-            tracing::warn!(
-                ?connection_id,
-                "attempting to fail a connection that does not exist"
-            );
-            return;
-        };
-        tracing::debug!(?error, remote_peer_id=?connection.remote_peer_id(), "failing connection");
-
-        out.emit_disconnect_event(connection_id, error);
-        self.notify_doc_actors_of_removed_connection(out, connection_id);
-        // Emit disconnect IoTask so caller can clean up the network connection
-        out.emit_io_action(HubIoAction::Disconnect { connection_id });
-    }
-
     fn notify_doc_actors_of_removed_connection(
         &mut self,
         out: &mut HubResults,
@@ -850,6 +878,320 @@ impl State {
                 },
             };
             out.send(conn, msg.encode());
+        }
+    }
+
+    // ---- Dialer / Listener handling ----
+
+    fn handle_add_dialer(
+        &mut self,
+        out: &mut HubResults,
+        config: crate::network::DialerConfig,
+    ) -> CommandResult {
+        let dialer_id = DialerId::new();
+        let url = config.url.clone();
+
+        let mut dialer = DialerState::new(dialer_id, config.url, config.backoff);
+
+        // Emit the first DialRequest immediately
+        dialer.mark_transport_pending();
+        out.emit_dial_request(DialRequest {
+            dialer_id,
+            url: url.clone(),
+        });
+
+        tracing::debug!(
+            ?dialer_id,
+            %url,
+            "dialer registered"
+        );
+
+        self.dialers.insert(dialer_id, dialer);
+
+        CommandResult::AddDialer { dialer_id }
+    }
+
+    fn handle_add_listener(&mut self, config: crate::network::ListenerConfig) -> CommandResult {
+        let listener_id = ListenerId::new();
+        let url = config.url.clone();
+
+        let listener = ListenerState::new(listener_id, config.url);
+
+        tracing::debug!(
+            ?listener_id,
+            %url,
+            "listener registered"
+        );
+
+        self.listeners.insert(listener_id, listener);
+
+        CommandResult::AddListener { listener_id }
+    }
+
+    fn handle_connection_lost<R: rand::Rng>(
+        &mut self,
+        rng: &mut R,
+        now: UnixTimestamp,
+        results: &mut HubResults,
+        connection_id: ConnectionId,
+    ) {
+        let Some(connection) = self.remove_connection(results, &connection_id) else {
+            return;
+        };
+
+        match connection.owner() {
+            ConnectionOwner::Dialer(dialer_id) => {
+                if let Some(dialer) = self.dialers.get_mut(&dialer_id) {
+                    let url = dialer.url.clone();
+                    match dialer.handle_connection_lost(rng, now, connection_id) {
+                        ConnectionLostOutcome::WillRetry { retry_at } => {
+                            tracing::debug!(
+                                ?dialer_id,
+                                %url,
+                                ?retry_at,
+                                "dialer will retry"
+                            );
+                        }
+                        ConnectionLostOutcome::MaxRetriesReached => {
+                            tracing::warn!(
+                                ?dialer_id,
+                                %url,
+                                "dialer max retries reached"
+                            );
+                            results.emit_connector_event(DialerEvent::MaxRetriesReached {
+                                dialer_id,
+                                url,
+                            });
+                        }
+                        ConnectionLostOutcome::NotOurs => {}
+                    }
+                }
+            }
+            ConnectionOwner::Listener(listener_id) => {
+                if let Some(listener) = self.listeners.get_mut(&listener_id) {
+                    listener.remove_connection(&connection_id);
+                    tracing::debug!(
+                        ?listener_id,
+                        %listener.url,
+                        ?connection_id,
+                        "connection removed from listener"
+                    );
+                }
+            }
+        }
+    }
+
+    fn handle_create_dialer_connection(
+        &mut self,
+        now: UnixTimestamp,
+        out: &mut HubResults,
+        dialer_id: DialerId,
+    ) -> CommandResult {
+        let dialer_exists = self.dialers.contains_key(&dialer_id);
+        if !dialer_exists {
+            tracing::warn!(?dialer_id, "create_dialer_connection for unknown dialer");
+        }
+
+        let owner = ConnectionOwner::Dialer(dialer_id);
+        let local_metadata = self.get_local_metadata();
+        let conn = Connection::new_handshaking(
+            out,
+            ConnectionArgs {
+                direction: ConnDirection::Outgoing,
+                owner,
+                local_peer_id: self.peer_id.clone(),
+                local_metadata: Some(local_metadata),
+                created_at: now,
+            },
+        );
+        let connection_id = conn.id();
+
+        // Set the dialer to Connected with the real connection ID
+        if let Some(dialer) = self.dialers.get_mut(&dialer_id)
+            && !dialer.set_connected(connection_id)
+        {
+            tracing::warn!(
+                ?dialer_id,
+                "create_dialer_connection called but dialer not in TransportPending state"
+            );
+        }
+
+        self.add_connection(connection_id, conn);
+
+        tracing::debug!(?dialer_id, ?connection_id, "dialer connection created");
+
+        out.emit_connection_event(ConnectionEvent::StateChanged {
+            connection_id,
+            owner,
+            new_state: self.connections.get(&connection_id).unwrap().info(),
+        });
+
+        CommandResult::CreateConnection { connection_id }
+    }
+
+    fn handle_create_listener_connection(
+        &mut self,
+        now: UnixTimestamp,
+        out: &mut HubResults,
+        listener_id: ListenerId,
+    ) -> CommandResult {
+        let listener_exists = self.listeners.contains_key(&listener_id);
+        if !listener_exists {
+            tracing::warn!(
+                ?listener_id,
+                "create_listener_connection for unknown listener"
+            );
+        }
+
+        let owner = ConnectionOwner::Listener(listener_id);
+        let local_metadata = self.get_local_metadata();
+        let conn = Connection::new_handshaking(
+            out,
+            ConnectionArgs {
+                direction: ConnDirection::Incoming,
+                owner,
+                local_peer_id: self.peer_id.clone(),
+                local_metadata: Some(local_metadata),
+                created_at: now,
+            },
+        );
+        let connection_id = conn.id();
+
+        if let Some(listener) = self.listeners.get_mut(&listener_id) {
+            listener.add_connection(connection_id);
+        }
+        self.add_connection(connection_id, conn);
+
+        tracing::debug!(?listener_id, ?connection_id, "listener connection created");
+
+        out.emit_connection_event(ConnectionEvent::StateChanged {
+            connection_id,
+            owner,
+            new_state: self.connections.get(&connection_id).unwrap().info(),
+        });
+
+        CommandResult::CreateConnection { connection_id }
+    }
+
+    fn handle_dial_failed<R: rand::Rng>(
+        &mut self,
+        rng: &mut R,
+        now: UnixTimestamp,
+        results: &mut HubResults,
+        dialer_id: DialerId,
+        error: &str,
+    ) {
+        let Some(dialer) = self.dialers.get_mut(&dialer_id) else {
+            tracing::warn!(
+                ?dialer_id,
+                %error,
+                "dial_failed for unknown dialer"
+            );
+            return;
+        };
+
+        let url = dialer.url.clone();
+        tracing::warn!(
+            ?dialer_id,
+            %url,
+            %error,
+            "dial failed"
+        );
+
+        match dialer.handle_dial_failed(rng, now) {
+            ConnectionLostOutcome::WillRetry { retry_at } => {
+                tracing::debug!(
+                    ?dialer_id,
+                    %url,
+                    ?retry_at,
+                    "dialer will retry after dial failure"
+                );
+            }
+            ConnectionLostOutcome::MaxRetriesReached => {
+                tracing::warn!(
+                    ?dialer_id,
+                    %url,
+                    "dialer max retries reached after dial failure"
+                );
+                results.emit_connector_event(DialerEvent::MaxRetriesReached { dialer_id, url });
+            }
+            ConnectionLostOutcome::NotOurs => {}
+        }
+    }
+
+    fn handle_remove_dialer(&mut self, results: &mut HubResults, dialer_id: DialerId) {
+        let Some(dialer) = self.dialers.remove(&dialer_id) else {
+            tracing::warn!(?dialer_id, "remove_dialer for unknown dialer");
+            return;
+        };
+
+        tracing::debug!(
+            ?dialer_id,
+            %dialer.url,
+            "removing dialer"
+        );
+
+        // Close the active connection if any
+        if let Some(conn_id) = dialer.active_connection() {
+            self.remove_connection(results, &conn_id);
+        }
+    }
+
+    fn handle_remove_listener(&mut self, results: &mut HubResults, listener_id: ListenerId) {
+        let Some(listener) = self.listeners.remove(&listener_id) else {
+            tracing::warn!(?listener_id, "remove_listener for unknown listener");
+            return;
+        };
+
+        tracing::debug!(
+            ?listener_id,
+            %listener.url,
+            "removing listener"
+        );
+
+        // Close all active connections belonging to this listener
+        for conn_id in listener.active_connections.iter() {
+            self.remove_connection(results, conn_id);
+        }
+    }
+
+    fn handle_tick(
+        &mut self,
+        _rng: &mut impl rand::Rng,
+        now: UnixTimestamp,
+        results: &mut HubResults,
+    ) {
+        // Check all dialers for expired retry timers
+        let mut need_dial = Vec::new();
+        for (dialer_id, dialer) in &mut self.dialers {
+            if dialer.check_retry(now) {
+                need_dial.push((*dialer_id, dialer.url.clone()));
+            }
+        }
+
+        for (dialer_id, url) in need_dial {
+            if let Some(dialer) = self.dialers.get_mut(&dialer_id) {
+                dialer.mark_transport_pending();
+                tracing::debug!(
+                    ?dialer_id,
+                    %url,
+                    "retry timer expired, requesting dial"
+                );
+                results.emit_dial_request(DialRequest { dialer_id, url });
+            }
+        }
+    }
+
+    /// Reset backoff for a dialer when a handshake completes successfully.
+    fn reset_dialer_backoff_for_connection(&mut self, connection_id: ConnectionId) {
+        let Some(conn) = self.connections.get(&connection_id) else {
+            return;
+        };
+        let ConnectionOwner::Dialer(dialer_id) = conn.owner() else {
+            return;
+        };
+        if let Some(dialer) = self.dialers.get_mut(&dialer_id) {
+            dialer.reset_backoff();
         }
     }
 }

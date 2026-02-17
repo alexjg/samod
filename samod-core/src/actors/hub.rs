@@ -3,6 +3,7 @@ mod command;
 pub(crate) use command::Command;
 pub use command::{CommandId, CommandResult};
 mod connection;
+pub(crate) mod dialer;
 mod dispatched_command;
 pub use dispatched_command::DispatchedCommand;
 mod hub_event;
@@ -14,6 +15,7 @@ pub(crate) use hub_event_payload::HubEventPayload;
 mod hub_results;
 pub use hub_results::HubResults;
 pub mod io;
+pub(crate) mod listener;
 mod state;
 pub(crate) use state::State;
 
@@ -134,5 +136,20 @@ impl Hub {
 
     pub fn is_stopped(&self) -> bool {
         self.state.run_state() == RunState::Stopped
+    }
+
+    /// Find an existing listener for the given URL.
+    ///
+    /// Returns the `ListenerId` of the first listener whose URL
+    /// matches, or `None` if no such listener exists.
+    pub fn find_listener_for_url(&self, url: &url::Url) -> Option<crate::ListenerId> {
+        self.state.find_listener_for_url(url)
+    }
+
+    /// Returns the current attempt count for a dialer.
+    ///
+    /// Returns `None` if the dialer doesn't exist.
+    pub fn dialer_attempt(&self, dialer_id: crate::DialerId) -> Option<u32> {
+        self.state.dialer_attempt(dialer_id)
     }
 }

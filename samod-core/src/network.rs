@@ -1,5 +1,17 @@
 mod connection_id;
 pub use connection_id::ConnectionId;
+mod dialer_id;
+pub use dialer_id::DialerId;
+mod listener_id;
+pub use listener_id::ListenerId;
+mod connection_owner;
+pub use connection_owner::ConnectionOwner;
+mod connector_config;
+pub use connector_config::{BackoffConfig, DialerConfig, ListenerConfig};
+mod dialer_event;
+pub use dialer_event::DialerEvent;
+mod transport_request;
+pub use transport_request::DialRequest;
 mod peer_metadata;
 pub use peer_metadata::PeerMetadata;
 mod conn_direction;

@@ -4,8 +4,8 @@ use crate::{
     ConnectionId, DocumentId, PeerId, UnixTimestamp,
     actors::{hub::HubResults, messages::SyncMessage},
     network::{
-        ConnDirection, ConnectionInfo, ConnectionState, PeerDocState, PeerMetadata,
-        wire_protocol::WireMessage,
+        ConnDirection, ConnectionInfo, ConnectionOwner, ConnectionState, PeerDocState,
+        PeerMetadata, wire_protocol::WireMessage,
     },
 };
 
@@ -15,6 +15,8 @@ use super::{EstablishedConnection, ReceiveEvent};
 #[derive(Debug, Clone)]
 pub struct Connection {
     id: ConnectionId,
+    /// The dialer or listener that owns this connection.
+    owner: ConnectionOwner,
     local_peer_id: PeerId,
     local_metadata: Option<PeerMetadata>,
     /// Current phase of the connection
@@ -40,6 +42,7 @@ pub(crate) enum ConnectionPhase {
 
 pub(crate) struct ConnectionArgs {
     pub(crate) direction: ConnDirection,
+    pub(crate) owner: ConnectionOwner,
     pub(crate) local_peer_id: PeerId,
     pub(crate) local_metadata: Option<PeerMetadata>,
     pub(crate) created_at: UnixTimestamp,
@@ -51,6 +54,7 @@ impl Connection {
         out: &mut HubResults,
         ConnectionArgs {
             direction,
+            owner,
             local_peer_id,
             local_metadata,
             created_at,
@@ -58,6 +62,7 @@ impl Connection {
     ) -> Self {
         let mut conn = Self {
             id: ConnectionId::new(),
+            owner,
             local_peer_id: local_peer_id.clone(),
             local_metadata: local_metadata.clone(),
             phase: ConnectionPhase::WaitingForJoin,
@@ -84,6 +89,10 @@ impl Connection {
 
     pub(crate) fn id(&self) -> ConnectionId {
         self.id
+    }
+
+    pub(crate) fn owner(&self) -> ConnectionOwner {
+        self.owner
     }
 
     pub(crate) fn receive_msg(

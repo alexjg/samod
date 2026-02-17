@@ -1,13 +1,13 @@
 use automerge::{Automerge, transaction::CommitOptions};
 
 use crate::{
-    ConnectionId, DocumentActorId, DocumentId,
+    ConnectionId, DialerId, DocumentActorId, DocumentId, ListenerId,
     actors::{
         DocToHubMsg,
         hub::{Command, CommandId},
     },
     io::IoResult,
-    network::ConnDirection,
+    network::{DialerConfig, ListenerConfig},
 };
 
 use super::{DispatchedCommand, HubEventPayload, HubInput, io::HubIoResult};
@@ -27,14 +27,6 @@ pub struct HubEvent {
 
 impl HubEvent {
     /// Creates an event indicating that an IO operation has completed.
-    ///
-    /// This event is used to notify the hub that a previously requested
-    /// IO operation (storage or network) has finished. The result contains
-    /// the task ID and the outcome of the operation.
-    ///
-    /// # Arguments
-    ///
-    /// * `result` - The result of the completed IO operation
     pub fn io_complete(result: IoResult<HubIoResult>) -> Self {
         HubEvent {
             payload: HubEventPayload::IoComplete(result),
@@ -42,10 +34,6 @@ impl HubEvent {
     }
 
     /// Creates a tick event for periodic processing.
-    ///
-    /// Tick events are used to trigger periodic operations like cleanup,
-    /// maintenance, or timeouts. They don't carry any data and are processed
-    /// by the main event loop.
     pub fn tick() -> Self {
         HubEvent {
             payload: HubEventPayload::Input(HubInput::Tick),
@@ -53,14 +41,6 @@ impl HubEvent {
     }
 
     /// Creates an event indicating that a message was received from a document actor.
-    ///
-    /// This event is used when document actors (running in the caller's environment)
-    /// send messages back to the hub.
-    ///
-    /// # Arguments
-    ///
-    /// * `actor_id` - The ID of the actor that sent the message
-    /// * `message` - The message from the actor
     pub fn actor_message(actor_id: DocumentActorId, message: DocToHubMsg) -> Self {
         HubEvent {
             payload: HubEventPayload::Input(HubInput::ActorMessage {
@@ -71,40 +51,8 @@ impl HubEvent {
     }
 
     /// Creates a command to receive a message on a specific connection.
-    ///
-    /// This represents an incoming message that should be processed by
-    /// the system. The message is associated with a specific connection ID.
-    ///
-    /// # Arguments
-    ///
-    /// * `connection_id` - The ID of the connection on which the message was received
-    /// * `msg` - The message content as bytes
-    ///
-    /// # Returns
-    ///
-    /// A `DispatchedCommand` containing both the command ID and the event
-    /// to be processed. The command ID can be used to track completion.
     pub fn receive(connection_id: ConnectionId, msg: Vec<u8>) -> DispatchedCommand {
         Self::dispatch_command(Command::Receive { connection_id, msg })
-    }
-
-    /// Creates a command to create a new connection and begins handshake if outgoing.
-    ///
-    /// Connections are used for network communication. This command will
-    /// create a new connection and return its ID when completed. For outgoing
-    /// connections, the handshake will be initiated automatically.
-    ///
-    /// # Arguments
-    ///
-    /// * `direction` - Whether this is an outgoing or incoming connection
-    ///
-    /// # Returns
-    ///
-    /// A `DispatchedCommand` containing both the command ID and the event
-    /// to be processed. The command ID can be used to retrieve the
-    /// connection ID when the command completes.
-    pub fn create_connection(direction: ConnDirection) -> DispatchedCommand {
-        Self::dispatch_command(Command::CreateConnection { direction })
     }
 
     /// Creates an event indicating that a document actor is ready.
@@ -113,11 +61,6 @@ impl HubEvent {
     }
 
     /// Creates a command to create a new document.
-    ///
-    /// # Returns
-    ///
-    /// A `DispatchedCommand` containing the command ID and event.
-    /// The command ID can be used to track when the document creation completes.
     pub fn create_document(mut initial_content: Automerge) -> DispatchedCommand {
         if initial_content.is_empty() {
             initial_content.empty_commit(CommitOptions::default());
@@ -128,53 +71,112 @@ impl HubEvent {
     }
 
     /// Creates a command to find and load an existing document.
-    ///
-    /// This command will attempt to load a document from storage by its ID.
-    /// If found, the document will be loaded into memory and made available
-    /// for operations.
-    ///
-    /// # Arguments
-    ///
-    /// * `document_id` - The ID of the document to find
-    ///
-    /// # Returns
-    ///
-    /// A `DispatchedCommand` containing the command ID and event.
     pub fn find_document(document_id: DocumentId) -> DispatchedCommand {
         Self::dispatch_command(Command::FindDocument { document_id })
     }
 
     /// Creates an event indicating that a network connection has been lost externally.
-    ///
-    /// This event is used when the calling application detects that a network connection
-    /// has been lost (e.g., TCP connection drop, network failure). Unlike internal
-    /// disconnections initiated by Samod, this represents an external connection loss
-    /// that doesn't require an IoTask to be issued.
-    ///
-    /// The connection will be marked as failed and cleaned up internally, and a
-    /// ConnectionFailed event will be emitted.
-    ///
-    /// # Arguments
-    ///
-    /// * `connection_id` - The ID of the connection that was lost
     pub fn connection_lost(connection_id: ConnectionId) -> Self {
         HubEvent {
             payload: HubEventPayload::Input(HubInput::ConnectionLost { connection_id }),
         }
     }
 
+    /// Register a new dialer.
+    ///
+    /// The first `DialRequest` is emitted immediately in the returned `HubResults`.
+    pub fn add_dialer(config: DialerConfig) -> DispatchedCommand {
+        let command_id = CommandId::new();
+        DispatchedCommand {
+            command_id,
+            event: HubEvent {
+                payload: HubEventPayload::Input(HubInput::AddDialer { command_id, config }),
+            },
+        }
+    }
+
+    /// Register a new listener.
+    ///
+    /// No `DialRequest` is emitted — the IO layer is responsible for
+    /// accepting inbound transports and calling `create_listener_connection`
+    /// for each one.
+    pub fn add_listener(config: ListenerConfig) -> DispatchedCommand {
+        let command_id = CommandId::new();
+        DispatchedCommand {
+            command_id,
+            event: HubEvent {
+                payload: HubEventPayload::Input(HubInput::AddListener { command_id, config }),
+            },
+        }
+    }
+
+    /// Create a connection for a dialer.
+    ///
+    /// Called by the IO layer after successfully establishing a transport.
+    /// The connection is immediately associated with the dialer.
+    /// The dialer transitions from `TransportPending` to `Connected`.
+    pub fn create_dialer_connection(dialer_id: DialerId) -> DispatchedCommand {
+        let command_id = CommandId::new();
+        DispatchedCommand {
+            command_id,
+            event: HubEvent {
+                payload: HubEventPayload::Input(HubInput::CreateDialerConnection {
+                    command_id,
+                    dialer_id,
+                }),
+            },
+        }
+    }
+
+    /// Create a connection for a listener.
+    ///
+    /// Called by the IO layer after accepting an inbound transport.
+    /// The connection is immediately added to the listener's active set.
+    pub fn create_listener_connection(listener_id: ListenerId) -> DispatchedCommand {
+        let command_id = CommandId::new();
+        DispatchedCommand {
+            command_id,
+            event: HubEvent {
+                payload: HubEventPayload::Input(HubInput::CreateListenerConnection {
+                    command_id,
+                    listener_id,
+                }),
+            },
+        }
+    }
+
+    /// The IO layer failed to establish a transport for a dialer.
+    ///
+    /// Triggers backoff and schedules a retry, or transitions to `Failed`
+    /// if max retries have been exceeded.
+    pub fn dial_failed(dialer_id: DialerId, error: String) -> HubEvent {
+        HubEvent {
+            payload: HubEventPayload::Input(HubInput::DialFailed { dialer_id, error }),
+        }
+    }
+
+    /// Remove a dialer. The active connection (if any) is closed. No further
+    /// dial requests will be emitted.
+    pub fn remove_dialer(dialer_id: DialerId) -> HubEvent {
+        HubEvent {
+            payload: HubEventPayload::Input(HubInput::RemoveDialer { dialer_id }),
+        }
+    }
+
+    /// Remove a listener. All active connections are closed.
+    pub fn remove_listener(listener_id: ListenerId) -> HubEvent {
+        HubEvent {
+            payload: HubEventPayload::Input(HubInput::RemoveListener { listener_id }),
+        }
+    }
+
+    pub fn stop() -> HubEvent {
+        HubEvent {
+            payload: HubEventPayload::Input(HubInput::Stop),
+        }
+    }
+
     /// Internal helper to create a dispatched command with a unique ID.
-    ///
-    /// This method wraps a command in the necessary structures to track
-    /// its execution and completion.
-    ///
-    /// # Arguments
-    ///
-    /// * `command` - The command to be dispatched
-    ///
-    /// # Returns
-    ///
-    /// A `DispatchedCommand` containing both the command ID and event
     fn dispatch_command(command: Command) -> DispatchedCommand {
         let command_id = CommandId::new();
         DispatchedCommand {
@@ -185,12 +187,6 @@ impl HubEvent {
                     command: Box::new(command),
                 }),
             },
-        }
-    }
-
-    pub fn stop() -> HubEvent {
-        HubEvent {
-            payload: HubEventPayload::Input(HubInput::Stop),
         }
     }
 }
