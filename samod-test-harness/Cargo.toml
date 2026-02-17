@@ -8,6 +8,7 @@ automerge = { workspace = true }
 rand = "0.9.1"
 samod-core = { path = "../samod-core" }
 tracing = "0.1.41"
+url = "2.5"
 
 [lib]
 

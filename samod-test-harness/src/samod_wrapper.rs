@@ -6,8 +6,8 @@ use std::{
 use automerge::Automerge;
 use rand::SeedableRng;
 use samod_core::{
-    CommandId, CommandResult, ConnectionId, DocumentActorId, DocumentChanged, DocumentId, PeerId,
-    StorageId, StorageKey, UnixTimestamp,
+    CommandId, CommandResult, ConnectionId, DialerId, DocumentActorId, DocumentChanged, DocumentId,
+    ListenerId, PeerId, StorageId, StorageKey, UnixTimestamp,
     actors::{
         DocumentActor, DocumentError,
         hub::{
@@ -16,7 +16,7 @@ use samod_core::{
         },
     },
     io::{IoResult, IoTask},
-    network::{ConnDirection, ConnectionEvent, ConnectionInfo, PeerDocState},
+    network::{ConnectionEvent, ConnectionInfo, DialerConfig, ListenerConfig, PeerDocState},
 };
 
 use crate::{Storage, doc_actor_runner::DocActorRunner};
@@ -39,6 +39,8 @@ pub struct SamodWrapper {
     // Connection events captured during event processing
     connection_events: Vec<ConnectionEvent>,
     announce_policy: Box<dyn Fn(DocumentId, PeerId) -> bool>,
+    /// A test listener ID used for incoming connections.
+    test_listener_id: Option<ListenerId>,
 }
 
 impl SamodWrapper {
@@ -79,18 +81,67 @@ impl SamodWrapper {
             document_actors: HashMap::new(),
             connection_events: Vec::new(),
             announce_policy: Box::new(|_, _| true),
+            test_listener_id: None,
         }
     }
 
+    /// Register a new dialer in the hub (for connector tests).
+    pub fn add_dialer(&mut self, config: DialerConfig) -> DialerId {
+        let DispatchedCommand { command_id, event } = HubEvent::add_dialer(config);
+        self.inbox.push_back(event);
+        self.handle_events();
+        let result = self
+            .completed_commands
+            .remove(&command_id)
+            .expect("add_dialer should complete immediately");
+        match result {
+            CommandResult::AddDialer { dialer_id } => dialer_id,
+            other => panic!("unexpected result for add_dialer: {other:?}"),
+        }
+    }
+
+    /// Register a new listener in the hub (for connector tests).
+    pub fn add_listener(&mut self, config: ListenerConfig) -> ListenerId {
+        let DispatchedCommand { command_id, event } = HubEvent::add_listener(config);
+        self.inbox.push_back(event);
+        self.handle_events();
+        let result = self
+            .completed_commands
+            .remove(&command_id)
+            .expect("add_listener should complete immediately");
+        match result {
+            CommandResult::AddListener { listener_id } => listener_id,
+            other => panic!("unexpected result for add_listener: {other:?}"),
+        }
+    }
+
+    /// Create an outgoing test connection via a fresh dialer.
     pub fn create_connection(&mut self) -> samod_core::ConnectionId {
-        let DispatchedCommand { command_id, event } =
-            HubEvent::create_connection(ConnDirection::Outgoing);
+        // Create a unique url for each dialer to avoid conflicts in the hug
+        let rand_id = rand::random::<u64>();
+        let url = url::Url::parse(&format!("test://dialer/{}", rand_id)).unwrap();
+
+        // Each outgoing connection requires its own dialer (a dialer has at most one connection)
+        let dialer_id = self.add_dialer(DialerConfig {
+            url,
+            backoff: samod_core::BackoffConfig {
+                initial_delay: Duration::from_secs(999),
+                max_delay: Duration::from_secs(999),
+                max_retries: None,
+            },
+        });
+        self.create_dialer_connection(dialer_id)
+    }
+
+    /// Create a connection for a specific dialer.
+    pub fn create_dialer_connection(&mut self, dialer_id: DialerId) -> samod_core::ConnectionId {
+        let DispatchedCommand { command_id, event } = HubEvent::create_dialer_connection(dialer_id);
         self.inbox.push_back(event);
         self.handle_events();
         let completed_command = self
             .completed_commands
             .remove(&command_id)
-            .expect("The create connection command never completed");
+            .expect("The create dialer connection command never completed");
         match completed_command {
             CommandResult::CreateConnection { connection_id, .. } => connection_id,
             _ => {
@@ -99,9 +150,27 @@ impl SamodWrapper {
         }
     }
 
+    /// Create an incoming test connection via a shared listener.
     pub fn create_incoming_connection(&mut self) -> samod_core::ConnectionId {
+        // Create a unique url for each listener to avoid conflicts in the hug
+        let rand_id = rand::random::<u64>();
+        let url = url::Url::parse(&format!("test://dialer/{}", rand_id)).unwrap();
+
+        // Ensure we have a test listener
+        if self.test_listener_id.is_none() {
+            self.test_listener_id = Some(self.add_listener(ListenerConfig { url }));
+        }
+        let listener_id = self.test_listener_id.unwrap();
+        self.create_listener_connection(listener_id)
+    }
+
+    /// Create a connection for a specific listener.
+    pub fn create_listener_connection(
+        &mut self,
+        listener_id: ListenerId,
+    ) -> samod_core::ConnectionId {
         let DispatchedCommand { command_id, event } =
-            HubEvent::create_connection(ConnDirection::Incoming);
+            HubEvent::create_listener_connection(listener_id);
         self.inbox.push_back(event);
         self.handle_events();
         let completed_command = self

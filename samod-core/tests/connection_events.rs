@@ -145,6 +145,7 @@ fn doc_conn_state_updated_after_sync() {
         .unwrap();
     let ConnectionEvent::StateChanged {
         connection_id: _,
+        owner: _,
         new_state,
     } = last_update_on_alice
     else {
@@ -163,6 +164,7 @@ fn doc_conn_state_updated_after_sync() {
         .unwrap();
     let ConnectionEvent::StateChanged {
         connection_id: _,
+        owner: _,
         new_state,
     } = last_update_on_bob
     else {

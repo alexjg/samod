@@ -199,6 +199,10 @@ mod document_id;
 mod ephemera;
 pub mod network;
 pub use network::ConnectionId;
+pub use network::{
+    BackoffConfig, ConnectionOwner, DialRequest, DialerConfig, DialerEvent, DialerId,
+    ListenerConfig, ListenerId,
+};
 mod peer_id;
 
 pub use actors::document::{CompactionHash, DocumentActorId};

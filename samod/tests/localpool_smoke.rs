@@ -1,10 +1,11 @@
-use std::convert::Infallible;
+use std::sync::Arc;
 
 use automerge::{
     Automerge, AutomergeError, ROOT, ReadDoc, ScalarValue, Value, transaction::Transactable,
 };
-use futures::{StreamExt, executor::LocalPool, task::LocalSpawnExt};
-use samod::{ConcurrencyConfig, ConnDirection};
+use futures::{executor::LocalPool, task::LocalSpawnExt};
+use samod::{BackoffConfig, ConcurrencyConfig, transport::channel::ChannelDialer};
+use url::Url;
 
 fn init_logging() {
     let _ = tracing_subscriber::fmt()
@@ -15,8 +16,6 @@ fn init_logging() {
 #[test]
 fn test_localpool() {
     init_logging();
-    let (tx_to_bob, rx_from_alice) = futures::channel::mpsc::unbounded::<Vec<u8>>();
-    let (tx_to_alice, rx_from_bob) = futures::channel::mpsc::unbounded::<Vec<u8>>();
 
     std::thread::spawn(|| {
         let mut pool = LocalPool::new();
@@ -45,24 +44,18 @@ fn test_localpool() {
                     .unwrap();
                 });
 
-                // Connect bob and alice to each other
-                let _alice_conn = alice
-                    .connect(
-                        rx_from_bob.map(Ok::<_, Infallible>),
-                        tx_to_bob,
-                        ConnDirection::Incoming,
-                    )
-                    .unwrap();
-                let bob_conn = bob
-                    .connect(
-                        rx_from_alice.map(Ok::<_, Infallible>),
-                        tx_to_alice,
-                        ConnDirection::Outgoing,
-                    )
+                // Bob sets up an acceptor, alice dials bob
+                let url = Url::parse("ws://test-localpool:0").unwrap();
+                let acceptor = bob.make_acceptor(url.clone()).unwrap();
+
+                let dialer = ChannelDialer::new(acceptor);
+
+                let dialer_handle = alice
+                    .dial(BackoffConfig::default(), Arc::new(dialer))
                     .unwrap();
 
                 // Wait for the connection to be ready
-                bob_conn.handshake_complete().await.unwrap();
+                dialer_handle.established().await.unwrap();
 
                 // Lookup the doc handle on Bob
                 let bob_handle = bob

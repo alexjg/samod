@@ -1,24 +1,23 @@
-use std::{
-    pin::Pin,
-    sync::{Arc, Mutex},
-};
+use std::sync::{Arc, Mutex};
 
 use futures::{
-    FutureExt, Sink, SinkExt, StreamExt,
+    FutureExt, SinkExt, StreamExt,
     stream::{BoxStream, FuturesUnordered},
 };
 use samod_core::{
-    DocumentActorId, DocumentId, PeerId,
+    DialerId, DocumentActorId, DocumentId, PeerId,
     actors::{
         document::io::{DocumentIoResult, DocumentIoTask},
-        hub::{DispatchedCommand, HubEvent},
+        hub::{CommandResult, DispatchedCommand, HubEvent},
     },
     io::{IoResult, IoTask, StorageResult, StorageTask},
 };
+use url::Url;
 
 use crate::{
     ConnFinishedReason, Inner, actor_task::ActorTask, announce_policy::LocalAnnouncePolicy,
-    connection::ConnectionHandle, storage::LocalStorage, unbounded::UnboundedReceiver,
+    connection::ConnectionHandle, storage::LocalStorage, transport::BoxSink,
+    unbounded::UnboundedReceiver,
 };
 
 #[derive(Debug)]
@@ -29,16 +28,13 @@ pub(crate) enum IoLoopTask {
         task: IoTask<DocumentIoTask>,
         actor_id: DocumentActorId,
     },
+    EstablishTransport {
+        dialer_id: DialerId,
+        url: Url,
+    },
+    /// Periodic tick to drive time-based connector logic (retry backoff).
+    Tick,
 }
-
-type BoxSink<T> = Pin<
-    Box<
-        dyn Sink<T, Error = Box<dyn std::error::Error + Send + Sync + 'static>>
-            + Send
-            + 'static
-            + Unpin,
-    >,
->;
 
 pub(crate) struct DriveConnectionTask {
     pub(crate) conn_handle: ConnectionHandle,
@@ -60,16 +56,21 @@ struct StorageTaskComplete {
     actor_id: DocumentActorId,
 }
 
-#[tracing::instrument(skip(inner, storage, announce_policy, rx))]
+/// Type alias for a shared, type-erased dialer.
+pub(crate) type DynDialer = Arc<dyn crate::Dialer>;
+
+#[tracing::instrument(skip(inner, storage, announce_policy, rx, dialers))]
 pub(crate) async fn io_loop<S: LocalStorage, A: LocalAnnouncePolicy>(
     local_peer_id: PeerId,
     inner: Arc<Mutex<Inner>>,
     storage: S,
     announce_policy: A,
     rx: UnboundedReceiver<IoLoopTask>,
+    dialers: Arc<Mutex<std::collections::HashMap<DialerId, DynDialer>>>,
 ) {
     let mut running_storage_tasks = FuturesUnordered::new();
     let mut running_connections = FuturesUnordered::new();
+    let mut running_transport_establishments = FuturesUnordered::new();
 
     loop {
         futures::select! {
@@ -85,7 +86,6 @@ pub(crate) async fn io_loop<S: LocalStorage, A: LocalAnnouncePolicy>(
                             let storage = storage.clone();
                             let announce_policy = announce_policy.clone();
                             async move {
-                                // let IoLoopTask { doc_id, task, actor_id } = next_task;
                                 let result = dispatch_document_task(storage.clone(), announce_policy.clone(), doc_id.clone(), task).await;
                                 StorageTaskComplete {
                                     result,
@@ -97,6 +97,33 @@ pub(crate) async fn io_loop<S: LocalStorage, A: LocalAnnouncePolicy>(
                     IoLoopTask::DriveConnection(task) => {
                         running_connections.push(drive_connection(inner.clone(), task));
                     }
+                    IoLoopTask::EstablishTransport { dialer_id, url } => {
+                        let dialer = {
+                            let dialers = dialers.lock().unwrap();
+                            dialers.get(&dialer_id).cloned()
+                        };
+                        if let Some(dialer) = dialer {
+                            let inner = inner.clone();
+                            let url_clone = url.clone();
+                            running_transport_establishments.push(async move {
+                                establish_transport(inner, dialer_id, url_clone, dialer).await
+                            });
+                        } else {
+                            tracing::warn!(
+                                ?dialer_id,
+                                %url,
+                                "no dialer registered"
+                            );
+                            let event = HubEvent::dial_failed(
+                                dialer_id,
+                                "no dialer registered".to_string(),
+                            );
+                            inner.lock().unwrap().handle_event(event);
+                        }
+                    }
+                    IoLoopTask::Tick => {
+                        inner.lock().unwrap().handle_event(HubEvent::tick());
+                    }
                 }
             }
             result = running_storage_tasks.select_next_some() => {
@@ -106,6 +133,9 @@ pub(crate) async fn io_loop<S: LocalStorage, A: LocalAnnouncePolicy>(
             },
             _ = running_connections.select_next_some() => {
 
+            },
+            _ = running_transport_establishments.select_next_some() => {
+                // Transport establishment results are handled inside the future itself
             }
         }
     }
@@ -216,4 +246,80 @@ async fn drive_connection(
         tracing::error!(err=?e, "error closing sink");
     }
     conn_handle.notify_finished(result);
+}
+
+/// Attempt to establish a transport for a dialer.
+///
+/// Calls the dialer, and on success creates a connection in the hub
+/// atomically associated with the dialer. On failure, notifies the hub so
+/// backoff can be applied.
+///
+/// The `url` parameter is used for logging only — the dialer knows its own URL.
+async fn establish_transport(
+    inner: Arc<Mutex<Inner>>,
+    dialer_id: DialerId,
+    url: Url,
+    dialer: DynDialer,
+) {
+    tracing::debug!(?dialer_id, %url, "establishing transport");
+
+    match dialer.connect().await {
+        Ok(transport) => {
+            tracing::debug!(?dialer_id, %url, "transport established successfully");
+
+            // Create a connection atomically associated with the dialer
+            let conn_handle = {
+                let mut inner_guard = inner.lock().unwrap();
+                let DispatchedCommand { command_id, event } =
+                    HubEvent::create_dialer_connection(dialer_id);
+
+                let (tx_result, mut rx_result) = futures::channel::oneshot::channel();
+                inner_guard.pending_commands.insert(command_id, tx_result);
+                inner_guard.handle_event(event);
+
+                let connection_id = match rx_result.try_recv() {
+                    Ok(Some(CommandResult::CreateConnection { connection_id })) => connection_id,
+                    other => {
+                        tracing::error!(
+                            ?dialer_id,
+                            ?other,
+                            "unexpected result from create_dialer_connection"
+                        );
+                        let event = HubEvent::dial_failed(
+                            dialer_id,
+                            "internal error creating connection".to_string(),
+                        );
+                        inner_guard.handle_event(event);
+                        return;
+                    }
+                };
+
+                inner_guard
+                    .connections
+                    .get(&connection_id)
+                    .expect("connection should exist after create_dialer_connection")
+                    .clone()
+            };
+
+            // Wire up the connection to the IO loop
+            let drive_task = DriveConnectionTask {
+                conn_handle,
+                stream: transport.stream,
+                sink: transport.sink,
+            };
+
+            // Drive the connection directly — we're already in the IO loop
+            drive_connection(inner, drive_task).await;
+        }
+        Err(e) => {
+            tracing::warn!(
+                ?dialer_id,
+                %url,
+                error = %e,
+                "dial failed"
+            );
+            let event = HubEvent::dial_failed(dialer_id, e.to_string());
+            inner.lock().unwrap().handle_event(event);
+        }
+    }
 }

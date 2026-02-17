@@ -1,12 +1,13 @@
-use std::{sync::Arc, time::Duration};
+use std::time::Duration;
 
 use automerge::{Automerge, ReadDoc, transaction::Transactable};
-use futures::{StreamExt, lock::Mutex};
-use samod::{ConnDirection, PeerId, Repo};
+use futures::StreamExt;
+use samod::{AcceptorHandle, BackoffConfig, PeerId, Repo};
 
 mod js_wrapper;
 use js_wrapper::JsWrapper;
 use tokio::net::TcpListener;
+use url::Url;
 
 fn init_logging() {
     let _ = tracing_subscriber::fmt()
@@ -137,16 +138,17 @@ async fn samod_connected_to_js_server(port: u16, peer_id: Option<String>) -> Rep
     if let Some(peer_id) = peer_id {
         builder = builder.with_peer_id(PeerId::from(peer_id.as_str()));
     }
-    let handle = builder.load().await;
-    let (conn, _) = tokio_tungstenite::connect_async(format!("ws://localhost:{}", port))
+    let repo = builder.load().await;
+    let url = Url::parse(&format!("ws://localhost:{}", port)).unwrap();
+
+    let dialer_handle = repo.dial_websocket(url, BackoffConfig::default()).unwrap();
+
+    tokio::time::timeout(Duration::from_secs(5), dialer_handle.established())
         .await
-        .unwrap();
+        .expect("dial_websocket timed out")
+        .expect("dial_websocket failed");
 
-    handle
-        .connect_tungstenite(conn, ConnDirection::Outgoing)
-        .unwrap();
-
-    handle
+    repo
 }
 
 struct RunningRustServer {
@@ -154,48 +156,36 @@ struct RunningRustServer {
     #[allow(dead_code)]
     handle: Repo,
     #[allow(dead_code)]
-    running_connections: Arc<Mutex<Vec<tokio::task::JoinHandle<()>>>>,
+    acceptor: AcceptorHandle,
 }
 
 async fn start_rust_server() -> RunningRustServer {
     let handle = Repo::build_tokio().load().await;
-    let running_connections = Arc::new(Mutex::new(Vec::new()));
-    let app = axum::Router::new()
-        .route("/", axum::routing::get(websocket_handler))
-        .with_state((handle.clone(), running_connections.clone()));
     let listener = TcpListener::bind("0.0.0.0:0")
         .await
         .expect("unable to bind socket");
     let port = listener.local_addr().unwrap().port();
+    let url = Url::parse(&format!("ws://0.0.0.0:{}", port)).unwrap();
+    let acceptor = handle.make_acceptor(url).unwrap();
+    let app = axum::Router::new()
+        .route("/", axum::routing::get(websocket_handler))
+        .with_state(acceptor.clone());
     let server = axum::serve(listener, app).into_future();
     tokio::spawn(server);
     RunningRustServer {
         port,
         handle,
-        running_connections,
+        acceptor,
     }
 }
 
-#[allow(clippy::type_complexity)]
 async fn websocket_handler(
     ws: axum::extract::ws::WebSocketUpgrade,
-    axum::extract::State((handle, running_connections)): axum::extract::State<(
-        Repo,
-        Arc<Mutex<Vec<tokio::task::JoinHandle<()>>>>,
-    )>,
+    axum::extract::State(acceptor): axum::extract::State<AcceptorHandle>,
 ) -> axum::response::Response {
-    ws.on_upgrade(|socket| handle_socket(socket, handle, running_connections))
-}
-
-async fn handle_socket(
-    socket: axum::extract::ws::WebSocket,
-    repo: Repo,
-    running_connections: Arc<Mutex<Vec<tokio::task::JoinHandle<()>>>>,
-) {
-    let conn = repo.accept_axum(socket).unwrap();
-    let handle = tokio::spawn(async move {
-        let finished = conn.finished().await;
-        tracing::error!(?finished, "connection finished");
-    });
-    running_connections.lock().await.push(handle);
+    ws.on_upgrade(|socket| async move {
+        if let Err(e) = acceptor.accept_axum(socket) {
+            tracing::error!(?e, "failed to accept axum websocket");
+        }
+    })
 }

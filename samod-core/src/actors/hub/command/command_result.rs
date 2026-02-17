@@ -1,4 +1,4 @@
-use crate::{ConnectionId, DocumentActorId, DocumentId};
+use crate::{ConnectionId, DialerId, DocumentActorId, DocumentId, ListenerId};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CommandResult {
@@ -24,5 +24,13 @@ pub enum CommandResult {
     FindDocument {
         actor_id: DocumentActorId,
         found: bool,
+    },
+    /// Result of AddDialer command.
+    AddDialer {
+        dialer_id: DialerId,
+    },
+    /// Result of AddListener command.
+    AddListener {
+        listener_id: ListenerId,
     },
 }
