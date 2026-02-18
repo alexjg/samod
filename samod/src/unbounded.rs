@@ -3,7 +3,7 @@ use std::{
     task::{Context, Poll},
 };
 
-use futures::Stream;
+use futures::{Sink, Stream};
 
 /// A wrapper around `async_channel::unbounded` which removes the `TrySendError::Full` error.
 pub(crate) fn channel<T>() -> (UnboundedSender<T>, UnboundedReceiver<T>) {
@@ -23,6 +23,37 @@ impl<T> UnboundedSender<T> {
         })
     }
 }
+
+impl<T> Sink<T> for UnboundedSender<T> {
+    type Error = ChanErr;
+
+    fn poll_ready(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        // It's an unbounded channel, so we're always ready to send
+        Poll::Ready(Ok(()))
+    }
+
+    fn start_send(self: Pin<&mut Self>, item: T) -> Result<(), Self::Error> {
+        self.unbounded_send(item).map_err(|_e| ChanErr)
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        Poll::Ready(Ok(()))
+    }
+
+    fn poll_close(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        self.0.close();
+        Poll::Ready(Ok(()))
+    }
+}
+
+#[derive(Debug)]
+pub struct ChanErr;
+impl std::fmt::Display for ChanErr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Channel error")
+    }
+}
+impl std::error::Error for ChanErr {}
 
 impl<T> Clone for UnboundedSender<T> {
     fn clone(&self) -> Self {
