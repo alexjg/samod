@@ -1,4 +1,4 @@
-use std::pin::Pin;
+use std::{pin::Pin, time::Duration};
 
 use futures::Future;
 
@@ -18,6 +18,12 @@ mod tokio;
 pub trait RuntimeHandle: 'static {
     /// Spawn a task to be run in the background
     fn spawn(&self, f: Pin<Box<dyn Future<Output = ()> + Send + 'static>>);
+
+    /// Return a future that completes after `duration` has elapsed.
+    ///
+    /// The returned future must be `Send + 'static` to match the requirements
+    /// of [`RuntimeHandle::spawn`].
+    fn sleep(&self, duration: Duration) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
 }
 
 /// An abstraction over the asynchronous runtime the repo is running on
@@ -35,4 +41,7 @@ pub trait RuntimeHandle: 'static {
 pub trait LocalRuntimeHandle {
     /// Spawn a task to be run in the background
     fn spawn(&self, f: Pin<Box<dyn Future<Output = ()>>>);
+
+    /// Return a future that completes after `duration` has elapsed.
+    fn sleep(&self, duration: Duration) -> Pin<Box<dyn Future<Output = ()>>>;
 }

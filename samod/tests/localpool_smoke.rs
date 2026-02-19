@@ -32,7 +32,7 @@ fn test_localpool() {
                 let bob = samod::Repo::build_localpool(spawner.clone())
                     .with_peer_id("bob".into())
                     .with_concurrency(ConcurrencyConfig::AsyncRuntime)
-                    .load()
+                    .load_local()
                     .await;
 
                 // Create the document on alice

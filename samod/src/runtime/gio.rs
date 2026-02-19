@@ -1,4 +1,4 @@
-use std::pin::Pin;
+use std::{pin::Pin, time::Duration};
 
 /// A [`RuntimeHandle`](crate::runtime::RuntimeHandle) implementation which usese the `glib` crate to spawn tasks
 ///
@@ -21,5 +21,13 @@ impl Default for GioRuntime {
 impl crate::runtime::RuntimeHandle for GioRuntime {
     fn spawn(&self, f: Pin<Box<dyn Future<Output = ()> + Send + 'static>>) {
         glib::spawn_future(f);
+    }
+
+    fn sleep(&self, duration: Duration) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>> {
+        // glib::timeout_future resolves after the given duration using the
+        // glib main loop's timer infrastructure.
+        Box::pin(async move {
+            glib::timeout_future(duration).await;
+        })
     }
 }

@@ -99,14 +99,16 @@ impl<R> RepoBuilder<InMemoryStorage, R, AlwaysAnnounce> {
     }
 }
 
-impl<S: Storage, R: RuntimeHandle, A: AnnouncePolicy> RepoBuilder<S, R, A> {
+impl<S: Storage, R: RuntimeHandle + Clone + Send, A: AnnouncePolicy> RepoBuilder<S, R, A> {
     /// Create the repository
     pub async fn load(self) -> Repo {
         Repo::load(self).await
     }
 }
 
-impl<S: LocalStorage, R: LocalRuntimeHandle, A: LocalAnnouncePolicy> RepoBuilder<S, R, A> {
+impl<S: LocalStorage, R: LocalRuntimeHandle + Clone + 'static, A: LocalAnnouncePolicy>
+    RepoBuilder<S, R, A>
+{
     /// Create the repository
     pub async fn load_local(self) -> Repo {
         Repo::load_local(self).await
