@@ -444,7 +444,11 @@ impl Repo {
         builder::RepoBuilder::new(crate::runtime::gio::GioRuntime::new())
     }
 
-    pub(crate) async fn load<R: runtime::RuntimeHandle, S: Storage, A: AnnouncePolicy>(
+    pub(crate) async fn load<
+        R: runtime::RuntimeHandle + Clone + Send,
+        S: Storage,
+        A: AnnouncePolicy,
+    >(
         builder: RepoBuilder<S, R, A>,
     ) -> Self {
         let RepoBuilder {
@@ -462,7 +466,7 @@ impl Repo {
 
     pub(crate) async fn load_local<
         'a,
-        R: runtime::LocalRuntimeHandle + 'a,
+        R: runtime::LocalRuntimeHandle + Clone + 'static,
         S: LocalStorage + 'a,
         A: LocalAnnouncePolicy + 'a,
     >(
@@ -1078,7 +1082,11 @@ impl TaskSetup {
             rx_storage,
         }
     }
-    fn spawn_tasks_local<R: LocalRuntimeHandle, S: LocalStorage, A: LocalAnnouncePolicy>(
+    fn spawn_tasks_local<
+        R: LocalRuntimeHandle + Clone + 'static,
+        S: LocalStorage,
+        A: LocalAnnouncePolicy,
+    >(
         self,
         runtime: R,
         storage: S,
@@ -1112,7 +1120,7 @@ impl TaskSetup {
         }
     }
 
-    fn spawn_tasks<R: RuntimeHandle, S: Storage, A: AnnouncePolicy>(
+    fn spawn_tasks<R: RuntimeHandle + Clone + Send, S: Storage, A: AnnouncePolicy>(
         self,
         runtime: R,
         storage: S,
