@@ -5,11 +5,12 @@ use automerge::{Automerge, ChangeHash};
 use super::SpawnArgs;
 // use super::driver::Driver;
 use super::io::{DocumentIoResult, DocumentIoTask};
+use crate::DialerId;
 use crate::actors::document::load::{Load, LoadComplete};
 use crate::actors::document::on_disk_state::OnDiskState;
 use crate::actors::document::peer_doc_connection::{AnnouncePolicy, PeerDocConnection};
 use crate::actors::document::{ActorInput, DocActorResult, DocumentStatus, WithDocResult};
-use crate::actors::messages::{Broadcast, DocToHubMsgPayload};
+use crate::actors::messages::{Broadcast, DocDialerState, DocToHubMsgPayload};
 use crate::actors::{DocToHubMsg, HubToDocMsg, RunState};
 use crate::io::{IoResult, IoTaskId};
 use crate::network::PeerDocState;
@@ -42,11 +43,14 @@ pub struct DocumentActor {
     /// Ongoing policy check tasks
     check_policy_tasks: HashMap<IoTaskId, ConnectionId>,
     run_state: RunState,
+    /// Current dialer states as reported by the hub. Used to delay NotFound
+    /// transitions when there are dialers actively connecting.
+    dialer_states: HashMap<DialerId, DocDialerState>,
 }
 
 impl DocumentActor {
     /// Creates a new document actor for the specified document.
-    #[tracing::instrument(skip(initial_content, initial_connections))]
+    #[tracing::instrument(skip(initial_content, initial_connections, dialer_states))]
     pub fn new(
         now: UnixTimestamp,
         SpawnArgs {
@@ -55,18 +59,23 @@ impl DocumentActor {
             document_id,
             initial_content,
             initial_connections,
+            dialer_states,
         }: SpawnArgs,
     ) -> (Self, DocActorResult) {
         let mut out = DocActorResult::default();
+
+        let any_dialer_pending = dialer_states
+            .values()
+            .any(|s| matches!(s, DocDialerState::Connecting));
 
         let state = if let Some(doc) = initial_content {
             // Let the hub know this document is ready immediately if we already have content
             out.send_message(DocToHubMsgPayload::DocumentStatusChanged {
                 new_status: DocumentStatus::Ready,
             });
-            DocState::new_ready(document_id.clone(), doc)
+            DocState::new_ready(document_id.clone(), doc, any_dialer_pending)
         } else {
-            DocState::new_loading(document_id.clone(), Automerge::new())
+            DocState::new_loading(document_id.clone(), Automerge::new(), any_dialer_pending)
         };
 
         // Enqueue initial load
@@ -83,6 +92,7 @@ impl DocumentActor {
             on_disk_state: OnDiskState::new(),
             peer_connections: HashMap::new(),
             run_state: RunState::Running,
+            dialer_states,
         };
 
         tracing::trace!(?initial_connections, "applying initial connections");
@@ -364,6 +374,11 @@ impl DocumentActor {
                 }
             }
             ActorInput::Tick => {}
+            ActorInput::DialerStatesChanged { dialers } => {
+                self.dialer_states = dialers;
+                self.doc_state
+                    .set_any_dialer_connecting(out, self.any_dialer_connecting());
+            }
         }
         self.step(now, out);
     }
@@ -469,6 +484,14 @@ impl DocumentActor {
     fn remove_connection(&mut self, conn_id: ConnectionId) {
         self.peer_connections.remove(&conn_id);
         self.doc_state.remove_connection(conn_id);
+    }
+
+    /// Returns true if any dialer is actively connecting (i.e. in
+    /// `NeedTransport` or `TransportPending` state).
+    fn any_dialer_connecting(&self) -> bool {
+        self.dialer_states
+            .values()
+            .any(|s| matches!(s, DocDialerState::Connecting))
     }
 }
 

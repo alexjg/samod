@@ -22,10 +22,9 @@ conn.handshake_complete().await.unwrap();
 
 // After
 let handle = repo.dial(BackoffConfig::default(), Arc::new(my_dialer)).unwrap();
-let peer_info = handle.established().await.unwrap();
+
 // or, for WebSocket URLs directly:
 let handle = repo.dial_websocket(url, BackoffConfig::default()).unwrap();
-handle.established().await.unwrap();
 ```
 
 #### Incoming connections (previously `Repo::connect(..., ConnDirection::Incoming)`)

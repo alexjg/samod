@@ -121,7 +121,6 @@ impl SamodWrapper {
         let rand_id = rand::random::<u64>();
         let url = url::Url::parse(&format!("test://dialer/{}", rand_id)).unwrap();
 
-        // Each outgoing connection requires its own dialer (a dialer has at most one connection)
         let dialer_id = self.add_dialer(DialerConfig {
             url,
             backoff: samod_core::BackoffConfig {
@@ -370,6 +369,25 @@ impl SamodWrapper {
 
     pub fn push_event(&mut self, event: HubEvent) {
         self.inbox.push_back(event);
+    }
+
+    /// Notify the hub that a dial attempt failed for a dialer.
+    pub fn dial_failed(&mut self, dialer_id: DialerId, error: String) {
+        self.inbox
+            .push_back(HubEvent::dial_failed(dialer_id, error));
+        self.handle_events();
+    }
+
+    /// Send a tick event to the hub (drives retry timers, etc.).
+    pub fn tick(&mut self) {
+        self.inbox.push_back(HubEvent::tick());
+        self.handle_events();
+    }
+
+    /// Remove a dialer from the hub.
+    pub fn remove_dialer(&mut self, dialer_id: DialerId) {
+        self.inbox.push_back(HubEvent::remove_dialer(dialer_id));
+        self.handle_events();
     }
 
     /// Returns the number of active document actors

@@ -248,11 +248,11 @@ impl Request {
         }
     }
 
-    pub(crate) fn status(&self, doc: &Automerge) -> RequestState {
+    pub(crate) fn status(&self, doc: &Automerge, any_dialer_connecting: bool) -> RequestState {
         if tracing::enabled!(tracing::Level::TRACE) {
-            tracing::trace!(?self.peer_states, "checking if request is done");
+            tracing::trace!(?self.peer_states, any_dialer_connecting, "checking if request is done");
         }
-        let all_unavailable = self.peer_states.values().all(|peer| {
+        let all_peers_unavailable = self.peer_states.values().all(|peer| {
             matches!(
                 peer.state,
                 PeerState::Unavailable
@@ -260,7 +260,17 @@ impl Request {
                     | PeerState::Requesting(Requesting::NotSentDueToAnnouncePolicy)
             )
         });
-        if all_unavailable {
+
+        // If a dialer is connecting we expect a new peer soon, so don't
+        // consider all avenues exhausted even if every current peer is
+        // unavailable.
+        let all_unavailable = all_peers_unavailable && !any_dialer_connecting;
+
+        if all_peers_unavailable && any_dialer_connecting {
+            tracing::debug!(
+                "All current peers are unavailable but a dialer is connecting, waiting"
+            );
+        } else if all_unavailable {
             tracing::debug!("All peers are unavailable, sync complete");
         }
 
@@ -271,7 +281,12 @@ impl Request {
             tracing::debug!("At least one peer has completed syncing, sync complete");
         }
 
-        tracing::trace!(?all_unavailable, ?any_sync_is_done, "request status check");
+        tracing::trace!(
+            ?all_unavailable,
+            ?any_sync_is_done,
+            any_dialer_connecting,
+            "request status check"
+        );
 
         RequestState {
             finished: all_unavailable || any_sync_is_done,

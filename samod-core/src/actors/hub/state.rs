@@ -12,7 +12,7 @@ use crate::{
             io::{HubIoAction, HubIoResult},
             listener::ListenerState,
         },
-        messages::{Broadcast, DocMessage, DocToHubMsgPayload, HubToDocMsgPayload},
+        messages::{Broadcast, DocDialerState, DocMessage, DocToHubMsgPayload, HubToDocMsgPayload},
     },
     ephemera::{EphemeralMessage, EphemeralSession, OutgoingSessionDetails},
     network::{
@@ -57,6 +57,10 @@ pub(crate) struct State {
 
     /// Registered listeners (incoming connections)
     listeners: HashMap<ListenerId, ListenerState>,
+
+    /// Cached dialer states last broadcast to document actors, used for
+    /// change detection so we only send updates when something changed.
+    last_dialer_states: HashMap<DialerId, DocDialerState>,
 }
 
 impl State {
@@ -76,6 +80,7 @@ impl State {
             run_state: RunState::Running,
             dialers: HashMap::new(),
             listeners: HashMap::new(),
+            last_dialer_states: HashMap::new(),
         }
     }
 
@@ -530,6 +535,9 @@ impl State {
             }
         }
 
+        // Broadcast dialer state changes to all document actors
+        self.broadcast_dialer_states_if_changed(results);
+
         for (command_id, result) in self.pop_completed_commands() {
             results.completed_commands.insert(command_id, result);
         }
@@ -817,6 +825,7 @@ impl State {
             document_id,
             initial_content: initial_doc,
             initial_connections,
+            dialer_states: self.current_doc_dialer_states(),
         });
 
         actor_id
@@ -878,6 +887,37 @@ impl State {
                 },
             };
             out.send(conn, msg.encode());
+        }
+    }
+
+    // ---- Dialer state broadcasting ----
+
+    /// Compute the current dialer states as seen by document actors.
+    fn current_doc_dialer_states(&self) -> HashMap<DialerId, DocDialerState> {
+        self.dialers
+            .iter()
+            .map(|(id, dialer)| (*id, dialer.to_doc_state(&self.connections)))
+            .collect()
+    }
+
+    /// If dialer states have changed since the last broadcast, send the new
+    /// states to all document actors and update the cache.
+    fn broadcast_dialer_states_if_changed(&mut self, results: &mut HubResults) {
+        let current = self.current_doc_dialer_states();
+        if current != self.last_dialer_states {
+            tracing::trace!(
+                ?current,
+                "broadcasting dialer state change to document actors"
+            );
+            for actor in self.actors.values() {
+                results.send_to_doc_actor(
+                    actor.actor_id,
+                    HubToDocMsgPayload::DialerStatesChanged {
+                        dialers: current.clone(),
+                    },
+                );
+            }
+            self.last_dialer_states = current;
         }
     }
 
