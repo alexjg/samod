@@ -2,9 +2,10 @@ use std::collections::HashMap;
 
 use automerge::Automerge;
 use samod_core::{
-    CommandId, ConnectionId, DocumentActorId, DocumentChanged, DocumentId, PeerId, StorageId,
+    CommandId, ConnectionId, DialerId, DocumentActorId, DocumentChanged, DocumentId, PeerId,
+    StorageId,
     actors::{DocumentError, hub::HubEvent},
-    network::{ConnectionEvent, ConnectionInfo, PeerDocState},
+    network::{ConnectionEvent, ConnectionInfo, DialerConfig, PeerDocState},
 };
 
 use crate::samod_id::SamodId;
@@ -114,6 +115,30 @@ impl SamodRef<'_> {
     /// Push an event to the wrapper's inbox (delegates to wrapper).
     pub fn push_event(&mut self, event: HubEvent) {
         self.wrapper().push_event(event)
+    }
+
+    pub fn add_dialer(&mut self, config: DialerConfig) -> DialerId {
+        self.wrapper().add_dialer(config)
+    }
+
+    pub fn create_dialer_connection(&mut self, dialer_id: DialerId) -> ConnectionId {
+        self.wrapper().create_dialer_connection(dialer_id)
+    }
+
+    pub fn dial_failed(&mut self, dialer_id: DialerId, error: String) {
+        self.wrapper().dial_failed(dialer_id, error)
+    }
+
+    pub fn tick(&mut self) {
+        self.wrapper().tick()
+    }
+
+    pub fn remove_dialer(&mut self, dialer_id: DialerId) {
+        self.wrapper().remove_dialer(dialer_id)
+    }
+
+    pub fn handle_events(&mut self) {
+        self.wrapper().handle_events()
     }
 
     pub fn document(&self, doc_id: &DocumentId) -> Option<&Automerge> {

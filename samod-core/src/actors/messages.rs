@@ -4,7 +4,7 @@ mod sync_message;
 pub(crate) use sync_message::SyncMessage;
 mod hub_to_doc_msg;
 pub use hub_to_doc_msg::HubToDocMsg;
-pub(crate) use hub_to_doc_msg::HubToDocMsgPayload;
+pub(crate) use hub_to_doc_msg::{DocDialerState, HubToDocMsgPayload};
 mod doc_to_hub_msg;
 pub use doc_to_hub_msg::DocToHubMsg;
 pub(crate) use doc_to_hub_msg::{Broadcast, DocToHubMsgPayload};

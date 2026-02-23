@@ -96,6 +96,41 @@ impl Network {
         }
     }
 
+    /// Connect two peers using an existing dialer on the left peer.
+    ///
+    /// Unlike `connect()`, this uses a pre-existing dialer to create the
+    /// outgoing connection on the left side, which preserves the dialer's
+    /// state transitions (e.g. TransportPending → Connected).
+    pub fn connect_with_dialer(
+        &mut self,
+        left: SamodId,
+        left_dialer_id: samod_core::DialerId,
+        right: SamodId,
+    ) -> Connected {
+        let left_connection = self
+            .samods
+            .get_mut(&left)
+            .expect("Left Samod not found")
+            .create_dialer_connection(left_dialer_id);
+        let right_connection = self
+            .samods
+            .get_mut(&right)
+            .expect("Right Samod not found")
+            .create_incoming_connection();
+
+        self.connections.push(Connection {
+            left_connection,
+            left_samod: left,
+            right_connection,
+            right_samod: right,
+        });
+
+        Connected {
+            left: left_connection,
+            right: right_connection,
+        }
+    }
+
     pub fn disconnect(&mut self, left: SamodId, right: SamodId) {
         let (left_conn_id, right_conn_id) = match self.connections.iter().find_map(|c| {
             // Make sure that we get the connection IDs the right way around

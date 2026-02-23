@@ -81,6 +81,11 @@
 //! - A **dialer** actively connects to a remote endpoint and automatically
 //!   reconnects with exponential backoff. Create one with [`Repo::dial()`],
 //!   which takes a [`BackoffConfig`] and an `Arc<dyn Dialer>`
+//! - `Repo::find` will wait for any dialers which are in the process of
+//!   connection to either establish a connection, or start retrying,
+//!   before marking a document as unavailable. This means that as long
+//!   as you add the [`Dialer`] before calling `Repo::find` you won't have to
+//!   coordinate the timing of your dialers and document lookups.
 //! - An **acceptor** passively accepts inbound connections. Create one with
 //!   [`Repo::make_acceptor()`], then feed accepted transports via
 //!   [`AcceptorHandle::accept()`].
@@ -525,6 +530,10 @@ impl Repo {
     /// synchronized with at least one remote peer which has the document. Otherwise,
     /// the future will resolve to `Ok(None)` once all peers have responded that
     /// they do not have the document.
+    ///
+    /// If there are existing [`Dialer`]s which have not yet established a connection,
+    /// but are not in the process of retrying or marked as failed then the future
+    /// will wait for them to either establish a connection or fail before resolving.
     pub fn find(
         &self,
         doc_id: DocumentId,

@@ -23,6 +23,10 @@ pub(super) struct DocState {
     /// The document ID
     document_id: DocumentId,
     doc: Automerge,
+    /// Whether any dialer is actively connecting. Used to delay marking
+    /// a document as unavailable (RequestStatus::NotFound) if there are
+    /// still dialers that might be able to find it
+    any_dialer_connecting: bool,
 }
 
 #[derive(Debug)]
@@ -45,21 +49,27 @@ enum PhaseTransition {
 }
 
 impl DocState {
-    pub fn new_loading(document_id: DocumentId, doc: Automerge) -> Self {
+    pub fn new_loading(
+        document_id: DocumentId,
+        doc: Automerge,
+        any_dialer_connecting: bool,
+    ) -> Self {
         Self {
             phase: Phase::Loading {
                 pending_sync_messages: HashMap::new(),
             },
             document_id,
             doc,
+            any_dialer_connecting,
         }
     }
 
-    pub fn new_ready(document_id: DocumentId, doc: Automerge) -> Self {
+    pub fn new_ready(document_id: DocumentId, doc: Automerge, any_dialer_connecting: bool) -> Self {
         Self {
             phase: Phase::Ready(Ready::new()),
             document_id,
             doc,
+            any_dialer_connecting,
         }
     }
 
@@ -111,7 +121,8 @@ impl DocState {
 
     fn check_request_completion(&self) -> PhaseTransition {
         if let Phase::Requesting(request) = &self.phase {
-            let RequestState { finished, found } = request.status(&self.doc);
+            let RequestState { finished, found } =
+                request.status(&self.doc, self.any_dialer_connecting);
             if finished {
                 if found {
                     PhaseTransition::ToReady
@@ -152,16 +163,12 @@ impl DocState {
                 let eligible_conns = peer_connections
                     .values()
                     .any(|p| p.announce_policy() != AnnouncePolicy::DontAnnounce);
-                if !eligible_conns {
+                if eligible_conns || self.any_dialer_connecting {
                     tracing::debug!(
-                        "no data found on disk and no connections available, transitioning to NotFound"
+                        eligible_conns,
+                        self.any_dialer_connecting,
+                        "no data found on disk, requesting document"
                     );
-                    self.handle_phase_transition(out, PhaseTransition::ToNotFound);
-                } else {
-                    tracing::debug!(
-                        "no data found on disk but connections available, requesting document"
-                    );
-                    // We still don't have the doc, request it
                     let mut next_phase = Phase::Requesting(Request::new(
                         self.document_id.clone(),
                         peer_connections.values(),
@@ -181,6 +188,11 @@ impl DocState {
                     out.send_message(DocToHubMsgPayload::DocumentStatusChanged {
                         new_status: DocumentStatus::Requesting,
                     });
+                } else {
+                    tracing::debug!(
+                        "no data found on disk and no connections available, transitioning to NotFound"
+                    );
+                    self.handle_phase_transition(out, PhaseTransition::ToNotFound);
                 }
                 return;
             }
@@ -392,6 +404,15 @@ impl DocState {
             PhaseTransition::None
         };
 
+        self.handle_phase_transition(out, transition);
+    }
+
+    /// Update whether any dialer is actively connecting and re-evaluate
+    /// request completion. Called when dialer states change, which can
+    /// unblock a NotFound transition.
+    pub(crate) fn set_any_dialer_connecting(&mut self, out: &mut DocActorResult, value: bool) {
+        self.any_dialer_connecting = value;
+        let transition = self.check_request_completion();
         self.handle_phase_transition(out, transition);
     }
 }
