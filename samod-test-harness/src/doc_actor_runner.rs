@@ -98,6 +98,7 @@ impl DocActorRunner {
             change_events,
             stopped: _,
             peer_state_changes,
+            sync_message_stats: _,
         } = result;
         for task in io_tasks {
             self.inbox.push_back(ActorEvent::Io(task));
