@@ -342,7 +342,9 @@ mod stopped;
 pub use stopped::Stopped;
 pub mod storage;
 pub mod transport;
-pub use crate::announce_policy::{AlwaysAnnounce, AnnouncePolicy, LocalAnnouncePolicy};
+pub use crate::announce_policy::{
+    AlwaysAnnounce, AnnouncePolicy, LocalAnnouncePolicy, NeverAnnounce,
+};
 pub use crate::builder::ConcurrencyConfig;
 use crate::{
     connection::ConnectionHandle,
