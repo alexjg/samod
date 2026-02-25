@@ -118,6 +118,8 @@ fn sleep(&self, duration: Duration) -> impl Future<Output = ()> + Send {
 * `RuntimeHandle::sleep` — required new method on the `RuntimeHandle` trait;
   must return a future that completes after the given `Duration`. This powers
   back-off delays inside the reconnection logic.
+* `samod::NeverAnnounce`, an `AnnouncePolicy` which never announces any documents
+  to peers
 
 ### Breaking Changes
 

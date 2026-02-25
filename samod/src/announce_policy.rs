@@ -71,3 +71,18 @@ impl AnnouncePolicy for AlwaysAnnounce {
         async { true }
     }
 }
+
+/// Always announce every documents to every peer
+#[derive(Clone)]
+pub struct NeverAnnounce;
+
+impl AnnouncePolicy for NeverAnnounce {
+    #[allow(clippy::manual_async_fn)]
+    fn should_announce(
+        &self,
+        _doc_id: DocumentId,
+        _peer_id: PeerId,
+    ) -> impl Future<Output = bool> + Send + 'static {
+        async { false }
+    }
+}
