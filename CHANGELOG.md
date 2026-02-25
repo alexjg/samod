@@ -120,6 +120,9 @@ fn sleep(&self, duration: Duration) -> impl Future<Output = ()> + Send {
   back-off delays inside the reconnection logic.
 * `samod::NeverAnnounce`, an `AnnouncePolicy` which never announces any documents
   to peers
+* Add the `native-tls` feature to `tungstenite` and `tokio-tungstenite` when the
+  `tungstenite` feature is enabled. This allows using TLS with WebSocket 
+  dialers.
 
 ### Breaking Changes
 
