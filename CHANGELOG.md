@@ -7,9 +7,12 @@ replaces the `Repo::connect` method with separate APIs for making outgoing
 connections (referred to as a "dialer") and accepting incoming connections
 (an "acceptor"). The payoff is that we can automatically handle reconnection.
 
-What follows is a quick guide to the new API; for more details on breaking
-changes and added features, see the "Added" and "Breaking Changes" sections
-which follow the guide.
+A second, smaller feature is the addition of a `RepoObserver` to help with
+monitoring running `samod` processes.
+
+What follows is a quick guide to the new connections API; for more details on
+breaking changes and other added features, see the "Added" and "Breaking
+Changes" sections which follow the guide.
 
 ### Updating to the New Connection API
 
@@ -126,6 +129,9 @@ fn sleep(&self, duration: Duration) -> impl Future<Output = ()> + Send {
 * The `samod::tokio_io` module which contains `TcpDialer` for connecting to 
   servers over TCP and `AcceptorHandle::accetp_tokio_io` which implements
   the receiving end
+* `samod::RepoObserver` which is notified of events occurring in the `Repo`
+  which may be of interest for monitoring (e.g. for producing throughput
+  statistics on sync message processing)
 
 ### Fixed
 

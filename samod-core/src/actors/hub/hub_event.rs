@@ -189,6 +189,34 @@ impl HubEvent {
             },
         }
     }
+
+    pub(crate) fn event_type_for_metrics(&self) -> &'static str {
+        match &self.payload {
+            HubEventPayload::IoComplete(io_completion) => match &io_completion.payload {
+                HubIoResult::Send => "io_complete_send",
+                HubIoResult::Disconnect => "io_complete_disconnect",
+            },
+            HubEventPayload::Input(input) => match input {
+                HubInput::Stop => "stop",
+                HubInput::Command { command, .. } => match command.as_ref() {
+                    Command::Receive { .. } => "receive",
+                    Command::ActorReady { .. } => "actor_ready",
+                    Command::CreateDocument { .. } => "create_document",
+                    Command::FindDocument { .. } => "find_document",
+                },
+                HubInput::Tick => "tick",
+                HubInput::ActorMessage { .. } => "actor_message",
+                HubInput::ConnectionLost { .. } => "connection_lost",
+                HubInput::AddDialer { .. } => "add_dialer",
+                HubInput::AddListener { .. } => "add_listener",
+                HubInput::CreateDialerConnection { .. } => "create_dialer_connection",
+                HubInput::CreateListenerConnection { .. } => "create_listener_connection",
+                HubInput::DialFailed { .. } => "dial_failed",
+                HubInput::RemoveDialer { .. } => "remove_dialer",
+                HubInput::RemoveListener { .. } => "remove_listener",
+            },
+        }
+    }
 }
 
 impl std::fmt::Display for HubEvent {

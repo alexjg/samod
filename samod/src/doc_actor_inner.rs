@@ -1,9 +1,11 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
-use automerge::Automerge;
+use automerge::{Automerge, ReadDoc};
 use futures::{Stream, channel::mpsc};
 use samod_core::{
-    ConnectionId, DocumentActorId, DocumentChanged, DocumentId, UnixTimestamp,
+    ConnectionId, DocumentActorId, DocumentChanged, DocumentId, SyncDirection, SyncMessageStat,
+    UnixTimestamp,
     actors::{
         DocToHubMsg,
         document::{DocActorResult, DocumentActor, WithDocResult},
@@ -13,6 +15,7 @@ use samod_core::{
 use crate::{
     actor_task::ActorTask,
     io_loop::{self, IoLoopTask},
+    observer::{self, RepoObserver},
     peer_connection_info::PeerDocState,
     unbounded::UnboundedSender,
 };
@@ -26,6 +29,7 @@ pub(crate) struct DocActorInner {
     change_listeners: Vec<mpsc::UnboundedSender<DocumentChanged>>,
     peer_state_change_listeners: Vec<mpsc::UnboundedSender<HashMap<ConnectionId, PeerDocState>>>,
     actor: DocumentActor,
+    observer: Option<Arc<dyn RepoObserver>>,
 }
 
 impl DocActorInner {
@@ -35,6 +39,7 @@ impl DocActorInner {
         actor: DocumentActor,
         tx_to_core: UnboundedSender<(DocumentActorId, DocToHubMsg)>,
         tx_io: UnboundedSender<io_loop::IoLoopTask>,
+        observer: Option<Arc<dyn RepoObserver>>,
     ) -> Self {
         DocActorInner {
             document_id,
@@ -45,6 +50,7 @@ impl DocActorInner {
             change_listeners: Vec::new(),
             peer_state_change_listeners: Vec::new(),
             actor,
+            observer,
         }
     }
 
@@ -89,9 +95,53 @@ impl DocActorInner {
             outgoing_messages,
             ephemeral_messages,
             change_events,
-            stopped: _,
+            stopped,
             peer_state_changes,
+            sync_message_stats,
+            pending_sync_messages,
         } = results;
+
+        let peer_count = self.actor.peers().len();
+        let stats = self.actor.document().stats();
+        log_sync_message_stats(
+            &self.document_id,
+            &sync_message_stats,
+            peer_count,
+            stats.num_ops,
+            stats.num_changes,
+        );
+
+        if let Some(ref obs) = self.observer {
+            for stat in &sync_message_stats {
+                let event = match stat.direction {
+                    SyncDirection::Received => observer::RepoEvent::SyncMessageReceived {
+                        document_id: self.document_id.clone(),
+                        connection_id: stat.connection_id,
+                        bytes: stat.bytes,
+                        duration: stat.duration,
+                        queue_duration: stat.queue_duration,
+                    },
+                    SyncDirection::Generated => observer::RepoEvent::SyncMessageGenerated {
+                        document_id: self.document_id.clone(),
+                        connection_id: stat.connection_id,
+                        bytes: stat.bytes,
+                        duration: stat.duration,
+                    },
+                };
+                obs.observe(&event);
+            }
+            if pending_sync_messages > 0 {
+                obs.observe(&observer::RepoEvent::DocumentPendingSyncMessages {
+                    document_id: self.document_id.clone(),
+                    count: pending_sync_messages,
+                });
+            }
+            if stopped {
+                obs.observe(&observer::RepoEvent::DocumentClosed {
+                    document_id: self.document_id.clone(),
+                });
+            }
+        }
         for task in io_tasks {
             if let Err(_e) = self.tx_io.unbounded_send(IoLoopTask::Storage {
                 doc_id: self.document_id.clone(),
@@ -174,5 +224,32 @@ impl DocActorInner {
         self.peer_state_change_listeners.push(tx);
         let peers = peers.into_iter().map(|(k, v)| (k, v.into())).collect();
         (peers, rx)
+    }
+}
+
+fn log_sync_message_stats(
+    doc_id: &DocumentId,
+    sync_message_stats: &[SyncMessageStat],
+    peer_count: usize,
+    num_ops: u64,
+    num_changes: u64,
+) {
+    for stat in sync_message_stats {
+        let direction = match stat.direction {
+            SyncDirection::Received => "received",
+            SyncDirection::Generated => "generated",
+        };
+        tracing::debug!(
+            document_id = %doc_id,
+            connection_id = ?stat.connection_id,
+            direction,
+            bytes = stat.bytes,
+            duration_us = stat.duration.as_micros() as u64,
+            queue_duration_us = stat.queue_duration.as_micros() as u64,
+            peer_count,
+            num_ops,
+            num_changes,
+            "sync_message"
+        );
     }
 }

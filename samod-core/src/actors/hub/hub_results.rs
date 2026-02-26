@@ -50,6 +50,15 @@ pub struct HubResults {
 
     /// Indicates whether the hub is currently stopped.
     pub stopped: bool,
+
+    /// Diagnostics: name of the event type that was processed.
+    pub event_type: &'static str,
+
+    /// Diagnostics: number of active connections after processing.
+    pub connections_count: usize,
+
+    /// Diagnostics: number of active document actors after processing.
+    pub documents_count: usize,
 }
 
 impl HubResults {

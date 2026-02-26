@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::time::Instant;
 
 use crate::{
     ConnectionId, DialerId, DocumentActorId, DocumentId, ListenerId, PeerId, StorageId,
@@ -382,6 +383,7 @@ impl State {
         results: &mut HubResults,
     ) {
         assert!(self.run_state != RunState::Stopped);
+        let event_type = event.event_type_for_metrics();
         match event.payload {
             HubEventPayload::IoComplete(io_completion) => {
                 match io_completion.payload {
@@ -509,6 +511,7 @@ impl State {
         }
 
         // Now ensure that every connection is connected to every document
+        let ensure_start = Instant::now();
         if self.run_state == RunState::Running {
             for (actor_id, conn_id, peer_id) in self.ensure_connections() {
                 results.send_to_doc_actor(
@@ -520,6 +523,16 @@ impl State {
                 );
             }
         }
+        let ensure_elapsed = ensure_start.elapsed();
+        let conns = self.connections.len();
+        let docs = self.document_to_actor.len();
+        tracing::debug!(
+            event_type,
+            connections = conns,
+            documents = docs,
+            ensure_connections_us = ensure_elapsed.as_micros(),
+            "hub event processed"
+        );
 
         // Notify any listeners of updated connection info ("info" here is for monitoring purposes,
         // things like the last time we sent a message and the heads of each document according
@@ -552,6 +565,9 @@ impl State {
         }
 
         results.stopped = self.run_state == RunState::Stopped;
+        results.event_type = event_type;
+        results.connections_count = conns;
+        results.documents_count = docs;
     }
 
     /// Handle a command, returning `Some(CommandResult)` if the command was handled
@@ -650,6 +666,7 @@ impl State {
                     target_id,
                     msg,
                 } => self.handle_doc_message(
+                    now,
                     out,
                     connection_id,
                     target_id,
@@ -672,6 +689,7 @@ impl State {
                     };
                     if let Some(msg) = self.ephemeral_session.receive_message(msg) {
                         self.handle_doc_message(
+                            now,
                             out,
                             connection_id,
                             target_id,
@@ -690,6 +708,7 @@ impl State {
 
     fn handle_doc_message(
         &mut self,
+        now: UnixTimestamp,
         out: &mut HubResults,
         connection_id: ConnectionId,
         target_id: PeerId,
@@ -709,6 +728,7 @@ impl State {
                 HubToDocMsgPayload::HandleDocMessage {
                     connection_id,
                     message: msg,
+                    received_at: now,
                 },
             );
         } else {

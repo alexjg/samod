@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::{ConnectionId, DialerId};
+use crate::{ConnectionId, DialerId, UnixTimestamp};
 
 use super::DocMessage;
 
@@ -53,6 +53,7 @@ pub(crate) enum HubToDocMsgPayload {
     HandleDocMessage {
         connection_id: ConnectionId,
         message: DocMessage,
+        received_at: UnixTimestamp,
     },
 
     /// Notify the actor of the current dialer states.

@@ -105,6 +105,7 @@ impl DocumentActor {
                     conn_id,
                     &mut actor.peer_connections,
                     msg,
+                    now, // just received, no queue delay
                 );
             }
         }
@@ -300,6 +301,7 @@ impl DocumentActor {
             ActorInput::HandleDocMessage {
                 connection_id,
                 message,
+                received_at,
             } => {
                 self.doc_state.handle_doc_message(
                     now,
@@ -307,6 +309,7 @@ impl DocumentActor {
                     connection_id,
                     &mut self.peer_connections,
                     message,
+                    received_at,
                 );
             }
             ActorInput::NewConnection {
@@ -443,9 +446,9 @@ impl DocumentActor {
 
     fn generate_sync_messages(&mut self, now: UnixTimestamp, out: &mut DocActorResult) {
         let doc_id = self.document_id.clone();
-        for (conn_id, msgs) in self
-            .doc_state
-            .generate_sync_messages(now, &mut self.peer_connections)
+        for (conn_id, msgs) in
+            self.doc_state
+                .generate_sync_messages(now, out, &mut self.peer_connections)
         {
             for msg in msgs {
                 out.send_message(DocToHubMsgPayload::SendSyncMessage {

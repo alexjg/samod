@@ -1,3 +1,5 @@
+use std::time::{Duration, Instant};
+
 use automerge::{
     Automerge, AutomergeError,
     sync::{self, SyncDoc},
@@ -62,31 +64,33 @@ impl PeerDocConnection {
         now: UnixTimestamp,
         doc: &mut Automerge,
         msg: sync::Message,
-    ) -> Result<(), AutomergeError> {
-        // Update the sync state with the received message
+    ) -> Result<Duration, AutomergeError> {
+        let start = Instant::now();
         doc.receive_sync_message(&mut self.sync_state, msg)?;
-        self.dirty = true; // Mark as dirty since we received a message
+        let duration = start.elapsed();
+        self.dirty = true;
         self.state.last_received = Some(now);
         self.state.last_acked_heads = self.sync_state.their_heads.clone();
         self.state.shared_heads = Some(self.sync_state.shared_heads.clone());
         self.state.their_heads = self.sync_state.their_heads.clone();
-        Ok(())
+        Ok(duration)
     }
 
     pub(super) fn generate_sync_message(
         &mut self,
         now: UnixTimestamp,
         doc: &Automerge,
-    ) -> Option<sync::Message> {
-        // Generate a sync message based on the current sync state
+    ) -> Option<(sync::Message, Duration)> {
+        let start = Instant::now();
         let message = doc.generate_sync_message(&mut self.sync_state);
+        let duration = start.elapsed();
         if let Some(msg) = &message {
             self.state.last_sent = Some(now);
             self.state.last_sent_heads = Some(msg.heads.clone());
             self.state.shared_heads = Some(self.sync_state.shared_heads.clone());
-            self.dirty = true; // Mark as dirty since we generated a message
+            self.dirty = true;
         }
-        message
+        message.map(|msg| (msg, duration))
     }
 
     pub(super) fn their_heads(&self) -> Option<Vec<automerge::ChangeHash>> {
