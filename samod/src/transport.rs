@@ -46,6 +46,34 @@ impl Transport {
             })),
         }
     }
+
+    /// Create a transport which uses a simple length-delimited framing protocol
+    /// over a Tokio AsyncRead/AsyncWrite stream. This should be used to accept
+    /// connections from the [`TcpDialer`](crate::tokio_io::TcpDialer). See the
+    /// documentation for that type for examples.
+    #[cfg(feature = "tokio")]
+    pub fn from_tokio_io<S>(io: S) -> Self
+    where
+        S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + Unpin + 'static,
+    {
+        use futures::{SinkExt, StreamExt, TryStreamExt};
+        use tokio_util::codec::{Framed, LengthDelimitedCodec};
+
+        let framed = Framed::new(io, LengthDelimitedCodec::new());
+        let (msg_sink, msg_stream) = framed.split();
+        let msg_stream = msg_stream.map(|result| result.map(|b| b.to_vec()));
+        let msg_sink = msg_sink.with(|msg: Vec<u8>| {
+            futures::future::ready(Ok::<_, std::io::Error>(bytes::Bytes::from(msg)))
+        });
+        Transport {
+            stream: msg_stream
+                .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync + 'static>)
+                .boxed(),
+            sink: Box::pin(msg_sink.sink_map_err(|e| {
+                Box::new(e) as Box<dyn std::error::Error + Send + Sync + 'static>
+            })),
+        }
+    }
 }
 
 pub mod channel {

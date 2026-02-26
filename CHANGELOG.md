@@ -123,6 +123,9 @@ fn sleep(&self, duration: Duration) -> impl Future<Output = ()> + Send {
 * Add the `native-tls` feature to `tungstenite` and `tokio-tungstenite` when the
   `tungstenite` feature is enabled. This allows using TLS with WebSocket 
   dialers.
+* The `samod::tokio_io` module which contains `TcpDialer` for connecting to 
+  servers over TCP and `AcceptorHandle::accetp_tokio_io` which implements
+  the receiving end
 
 ### Fixed
 
