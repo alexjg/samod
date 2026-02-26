@@ -277,6 +277,13 @@ impl DocState {
         };
         tracing::debug!(?connection_id, peer_id=?peer_conn.peer_id, ?msg, "received msg");
 
+        if let SyncMessage::Request { .. } = msg {
+            // Mark the connection as having requested so we know to send them
+            // sync messages in the future, even if we haven't received a sync
+            // message from them yet
+            peer_conn.mark_requested();
+        }
+
         let transition = match &mut self.phase {
             Phase::Loading {
                 pending_sync_messages,

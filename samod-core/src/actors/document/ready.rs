@@ -44,9 +44,13 @@ impl Ready {
         doc: &mut Automerge,
         conn: &mut PeerDocConnection,
     ) -> Option<SyncMessage> {
-        if conn.their_heads().is_none() && conn.announce_policy() != AnnouncePolicy::Announce {
-            // if we haven't received a sync message from them (indicicated by their heads being None)
-            // and the announce policy is set to not announce, then we don't want to send a sync message
+        if conn.their_heads().is_none()
+            && !conn.has_requested()
+            && conn.announce_policy() != AnnouncePolicy::Announce
+        {
+            // if we haven't received a sync message from them, and they don't
+            // already have the document and the announce policy is set to not
+            // announce, then we don't want to send a sync message
             return None;
         }
         conn.generate_sync_message(now, doc)

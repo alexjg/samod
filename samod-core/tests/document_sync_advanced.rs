@@ -100,7 +100,7 @@ fn three_peer_chain_sync() {
     assert_eq!(result, "change_applied");
 
     // Run here so that charlie has a chance to announce to Bob. Otherwise what can happen
-    // is that the request from bob and the requeset from alice cross in the air and so
+    // is that the request from bob and the request from alice cross in the air and so
     // alice considers the document unavailable (because she doesn't have it in storage,
     // and is only connected to bob, who just requested it from her)
     network.run_until_quiescent();
@@ -557,4 +557,98 @@ fn create_while_connected() {
         .check_find_document_result(find_command)
         .expect("error running find command")
         .expect("bob should have the doc");
+}
+
+#[test]
+fn three_chained_sync_servers() {
+    init_logging();
+
+    let mut network = Network::new();
+
+    // Create three peers: Alice, Bob, and Charlie
+    // Then set their announce policies so that alice never announces, bob only
+    // announces to alice, and charlie only announces to bob. This simulates a
+    // chain of federating sync servers
+    let alice = network.create_samod("Alice");
+    network
+        .samod(&alice)
+        .set_announce_policy(Box::new(|_, _| false));
+    let alice_peer_id = network.samod(&alice).peer_id();
+    let bob = network.create_samod("Bob");
+    network
+        .samod(&bob)
+        .set_announce_policy(Box::new(move |_, peer_id| peer_id == alice_peer_id));
+    let bob_peer_id = network.samod(&bob).peer_id();
+    let charlie = network.create_samod("Charlie");
+    network
+        .samod(&charlie)
+        .set_announce_policy(Box::new(move |_, peer_id| peer_id == bob_peer_id));
+
+    // Connect them in a chain: Alice <-> Bob <-> Charlie
+    network.connect(alice, bob);
+    network.connect(bob, charlie);
+
+    // Run until handshakes complete
+    network.run_until_quiescent();
+
+    // Verify all handshakes completed
+    for (name, peer_id) in [("Alice", alice), ("Bob", bob), ("Charlie", charlie)] {
+        let events = network.samod(&peer_id).connection_events();
+        let handshake_completed = events
+            .iter()
+            .any(|event| matches!(event, ConnectionEvent::HandshakeCompleted { .. }));
+        assert!(handshake_completed, "{name}'s handshake should complete");
+    }
+
+    // Alice creates a document
+    let RunningDocIds { doc_id, actor_id } = network.samod(&alice).create_document();
+
+    // Add a change to Alice's document
+    let result = network
+        .samod(&alice)
+        .with_document_by_actor(actor_id, |doc| {
+            let mut tx = doc.transaction();
+            tx.put(automerge::ROOT, "creator", "alice").unwrap();
+            tx.put(automerge::ROOT, "message", "hello from alice")
+                .unwrap();
+            tx.commit();
+            "change_applied"
+        })
+        .unwrap();
+
+    assert_eq!(result, "change_applied");
+
+    network.run_until_quiescent();
+
+    let charlie_actor_id = network.samod(&charlie).find_document(&doc_id);
+
+    // Verify Alice found the document through the chain
+    assert!(
+        charlie_actor_id.is_some(),
+        "Charlie should find the document through Bob from Charlie"
+    );
+    let charlie_actor_id = charlie_actor_id.unwrap();
+
+    // Verify Charlie's document contains the expected data
+    let verification_result = network
+        .samod(&charlie)
+        .with_document_by_actor(charlie_actor_id, |doc| {
+            // Check the document content
+            let creator = doc
+                .get(automerge::ROOT, "creator")
+                .unwrap()
+                .map(|(value, _)| value.into_string().unwrap())
+                .unwrap_or_default();
+            let message = doc
+                .get(automerge::ROOT, "message")
+                .unwrap()
+                .map(|(value, _)| value.into_string().unwrap())
+                .unwrap_or_default();
+
+            (creator, message)
+        })
+        .expect("with_document should succeed");
+
+    assert_eq!(verification_result.0, "alice");
+    assert_eq!(verification_result.1, "hello from alice");
 }

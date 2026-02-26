@@ -124,6 +124,11 @@ fn sleep(&self, duration: Duration) -> impl Future<Output = ()> + Send {
   `tungstenite` feature is enabled. This allows using TLS with WebSocket 
   dialers.
 
+### Fixed
+
+* A bug where requests which were forwarded across peers who were configured
+  to not announce documents would fail to resolve on the original requestor
+
 ### Breaking Changes
 
 * **`Repo::connect` / `Connection` removed.** The old unified `connect` method
