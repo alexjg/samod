@@ -1,0 +1,19 @@
+[package]
+name = "samod-cli"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+clap = { version = "4.5.60", features = ["derive"] }
+tokio = { version = "1.49.0", features = ["full"] }
+samod = { path = "../samod", version="0.7", features=["tokio", "axum", "tungstenite", "threadpool"] }
+url = "2.5.8"
+axum = { version = "0.8.8", features = ["ws"] }
+tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
+tracing = "0.1.44"
+uuid = { version = "1.21.0", features = ["v4"] }
+rand = { workspace = true }
+opentelemetry = { version = "0.31", features = ["metrics"] }
+opentelemetry_sdk = { version = "0.31", features = ["metrics", "rt-tokio"] }
+opentelemetry-otlp = { version = "0.31", features = ["metrics", "http-proto"] }
+rayon = "1.11.0"

@@ -1,9 +1,10 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use automerge::Automerge;
 use futures::{Stream, channel::mpsc};
 use samod_core::{
-    ConnectionId, DocumentActorId, DocumentChanged, DocumentId, UnixTimestamp,
+    ConnectionId, DocumentActorId, DocumentChanged, DocumentId, SyncDirection, UnixTimestamp,
     actors::{
         DocToHubMsg,
         document::{DocActorResult, DocumentActor, WithDocResult},
@@ -13,6 +14,7 @@ use samod_core::{
 use crate::{
     actor_task::ActorTask,
     io_loop::{self, IoLoopTask},
+    observer::{self, RepoObserver},
     peer_connection_info::PeerDocState,
     unbounded::UnboundedSender,
 };
@@ -26,6 +28,7 @@ pub(crate) struct DocActorInner {
     change_listeners: Vec<mpsc::UnboundedSender<DocumentChanged>>,
     peer_state_change_listeners: Vec<mpsc::UnboundedSender<HashMap<ConnectionId, PeerDocState>>>,
     actor: DocumentActor,
+    observer: Option<Arc<dyn RepoObserver>>,
 }
 
 impl DocActorInner {
@@ -35,6 +38,7 @@ impl DocActorInner {
         actor: DocumentActor,
         tx_to_core: UnboundedSender<(DocumentActorId, DocToHubMsg)>,
         tx_io: UnboundedSender<io_loop::IoLoopTask>,
+        observer: Option<Arc<dyn RepoObserver>>,
     ) -> Self {
         DocActorInner {
             document_id,
@@ -45,6 +49,7 @@ impl DocActorInner {
             change_listeners: Vec::new(),
             peer_state_change_listeners: Vec::new(),
             actor,
+            observer,
         }
     }
 
@@ -89,9 +94,35 @@ impl DocActorInner {
             outgoing_messages,
             ephemeral_messages,
             change_events,
-            stopped: _,
+            stopped,
             peer_state_changes,
+            sync_message_stats,
         } = results;
+
+        if let Some(ref obs) = self.observer {
+            for stat in &sync_message_stats {
+                let event = match stat.direction {
+                    SyncDirection::Received => observer::RepoEvent::SyncMessageReceived {
+                        document_id: self.document_id.clone(),
+                        connection_id: stat.connection_id,
+                        bytes: stat.bytes,
+                        duration: stat.duration,
+                    },
+                    SyncDirection::Generated => observer::RepoEvent::SyncMessageGenerated {
+                        document_id: self.document_id.clone(),
+                        connection_id: stat.connection_id,
+                        bytes: stat.bytes,
+                        duration: stat.duration,
+                    },
+                };
+                obs.observe(&event);
+            }
+            if stopped {
+                obs.observe(&observer::RepoEvent::DocumentClosed {
+                    document_id: self.document_id.clone(),
+                });
+            }
+        }
         for task in io_tasks {
             if let Err(_e) = self.tx_io.unbounded_send(IoLoopTask::Storage {
                 doc_id: self.document_id.clone(),

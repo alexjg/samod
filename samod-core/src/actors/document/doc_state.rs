@@ -1,11 +1,12 @@
 use std::collections::HashMap;
+use std::time::Instant;
 
 use automerge::Automerge;
 
 use crate::{
     ConnectionId, DocumentId, StorageKey, UnixTimestamp,
     actors::{
-        document::DocActorResult,
+        document::{DocActorResult, SyncDirection, SyncMessageStat},
         messages::{Broadcast, DocMessage, DocToHubMsgPayload, SyncMessage},
     },
 };
@@ -299,11 +300,25 @@ impl DocState {
                 self.check_request_completion()
             }
             Phase::Ready(ready) => {
+                let bytes = match &msg {
+                    SyncMessage::Request { data } | SyncMessage::Sync { data } => data.len(),
+                    SyncMessage::DocUnavailable => 0,
+                };
+                let start = Instant::now();
                 let heads_before = self.doc.get_heads();
                 ready.receive_sync_message(now, &mut self.doc, peer_conn, msg);
+                let duration = start.elapsed();
                 let heads_after = self.doc.get_heads();
                 if heads_before != heads_after {
                     out.emit_doc_changed(heads_after);
+                }
+                if bytes > 0 {
+                    out.sync_message_stats.push(SyncMessageStat {
+                        connection_id,
+                        direction: SyncDirection::Received,
+                        bytes,
+                        duration,
+                    });
                 }
                 PhaseTransition::None
             }
@@ -345,6 +360,7 @@ impl DocState {
     pub fn generate_sync_messages(
         &mut self,
         now: UnixTimestamp,
+        out: &mut DocActorResult,
         peer_connections: &mut HashMap<ConnectionId, PeerDocConnection>,
     ) -> HashMap<ConnectionId, Vec<SyncMessage>> {
         let mut result: HashMap<ConnectionId, Vec<SyncMessage>> = HashMap::new();
@@ -358,7 +374,21 @@ impl DocState {
                     }
                 }
                 Phase::Ready(ready) => {
+                    let start = Instant::now();
                     if let Some(msg) = ready.generate_sync_message(now, &mut self.doc, peer_conn) {
+                        let duration = start.elapsed();
+                        let bytes = match &msg {
+                            SyncMessage::Sync { data } => data.len(),
+                            _ => 0,
+                        };
+                        if bytes > 0 {
+                            out.sync_message_stats.push(SyncMessageStat {
+                                connection_id: *conn_id,
+                                direction: SyncDirection::Generated,
+                                bytes,
+                                duration,
+                            });
+                        }
                         tracing::debug!(?conn_id, peer_id=?peer_conn.peer_id, ?msg, "sending sync msg");
                         result.entry(*conn_id).or_default().push(msg);
                     }

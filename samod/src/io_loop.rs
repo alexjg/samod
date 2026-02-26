@@ -15,8 +15,13 @@ use samod_core::{
 use url::Url;
 
 use crate::{
-    ConnFinishedReason, Inner, actor_task::ActorTask, announce_policy::LocalAnnouncePolicy,
-    connection::ConnectionHandle, storage::LocalStorage, transport::BoxSink,
+    ConnFinishedReason, Inner,
+    actor_task::ActorTask,
+    announce_policy::LocalAnnouncePolicy,
+    connection::ConnectionHandle,
+    observer::{self, RepoObserver},
+    storage::LocalStorage,
+    transport::BoxSink,
     unbounded::UnboundedReceiver,
 };
 
@@ -59,7 +64,7 @@ struct StorageTaskComplete {
 /// Type alias for a shared, type-erased dialer.
 pub(crate) type DynDialer = Arc<dyn crate::Dialer>;
 
-#[tracing::instrument(skip(inner, storage, announce_policy, rx, dialers))]
+#[tracing::instrument(skip(inner, storage, announce_policy, rx, dialers, observer))]
 pub(crate) async fn io_loop<S: LocalStorage, A: LocalAnnouncePolicy>(
     local_peer_id: PeerId,
     inner: Arc<Mutex<Inner>>,
@@ -67,6 +72,7 @@ pub(crate) async fn io_loop<S: LocalStorage, A: LocalAnnouncePolicy>(
     announce_policy: A,
     rx: UnboundedReceiver<IoLoopTask>,
     dialers: Arc<Mutex<std::collections::HashMap<DialerId, DynDialer>>>,
+    observer: Option<Arc<dyn RepoObserver>>,
 ) {
     let mut running_storage_tasks = FuturesUnordered::new();
     let mut running_connections = FuturesUnordered::new();
@@ -85,8 +91,9 @@ pub(crate) async fn io_loop<S: LocalStorage, A: LocalAnnouncePolicy>(
                         running_storage_tasks.push({
                             let storage = storage.clone();
                             let announce_policy = announce_policy.clone();
+                            let observer = observer.clone();
                             async move {
-                                let result = dispatch_document_task(storage.clone(), announce_policy.clone(), doc_id.clone(), task).await;
+                                let result = dispatch_document_task(storage.clone(), announce_policy.clone(), doc_id.clone(), task, observer.as_deref()).await;
                                 StorageTaskComplete {
                                     result,
                                     actor_id,
@@ -105,8 +112,9 @@ pub(crate) async fn io_loop<S: LocalStorage, A: LocalAnnouncePolicy>(
                         if let Some(dialer) = dialer {
                             let inner = inner.clone();
                             let url_clone = url.clone();
+                            let observer = observer.clone();
                             running_transport_establishments.push(async move {
-                                establish_transport(inner, dialer_id, url_clone, dialer).await
+                                establish_transport(inner, dialer_id, url_clone, dialer, observer.as_deref()).await
                             });
                         } else {
                             tracing::warn!(
@@ -151,12 +159,29 @@ async fn dispatch_document_task<S: LocalStorage, A: LocalAnnouncePolicy>(
     announce: A,
     document_id: DocumentId,
     task: IoTask<DocumentIoTask>,
+    obs: Option<&dyn RepoObserver>,
 ) -> IoResult<DocumentIoResult> {
     match task.action {
-        DocumentIoTask::Storage(storage_task) => IoResult {
-            task_id: task.task_id,
-            payload: DocumentIoResult::Storage(dispatch_storage_task(storage_task, storage).await),
-        },
+        DocumentIoTask::Storage(storage_task) => {
+            let operation = match &storage_task {
+                StorageTask::Load { .. } => observer::StorageOperation::Load,
+                StorageTask::LoadRange { .. } => observer::StorageOperation::LoadRange,
+                StorageTask::Put { .. } => observer::StorageOperation::Put,
+                StorageTask::Delete { .. } => observer::StorageOperation::Delete,
+            };
+            let start = std::time::Instant::now();
+            let result = dispatch_storage_task(storage_task, storage).await;
+            if let Some(obs) = obs {
+                obs.observe(&observer::RepoEvent::StorageOperationCompleted {
+                    operation,
+                    duration: start.elapsed(),
+                });
+            }
+            IoResult {
+                task_id: task.task_id,
+                payload: DocumentIoResult::Storage(result),
+            }
+        }
         DocumentIoTask::CheckAnnouncePolicy { peer_id } => IoResult {
             task_id: task.task_id,
             payload: DocumentIoResult::CheckAnnouncePolicy(
@@ -260,6 +285,7 @@ async fn establish_transport(
     dialer_id: DialerId,
     url: Url,
     dialer: DynDialer,
+    obs: Option<&dyn RepoObserver>,
 ) {
     tracing::debug!(?dialer_id, %url, "establishing transport");
 
@@ -293,6 +319,10 @@ async fn establish_transport(
                         return;
                     }
                 };
+
+                if let Some(obs) = obs {
+                    obs.observe(&observer::RepoEvent::ConnectionEstablished { connection_id });
+                }
 
                 inner_guard
                     .connections
