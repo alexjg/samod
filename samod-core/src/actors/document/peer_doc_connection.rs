@@ -10,6 +10,10 @@ pub(super) struct PeerDocConnection {
     pub(super) connection_id: ConnectionId,
     pub(super) peer_id: PeerId,
     pub(super) sync_state: sync::State,
+    // Track whether we've ever received a request so that we know whether to
+    // relay the document to the requestor if we obtain the docuemnt after the
+    // request was made
+    pub(super) has_requested: bool,
     // Whether this state has changed since the last pop
     dirty: bool,
     state: PeerDocState,
@@ -31,6 +35,7 @@ impl PeerDocConnection {
             connection_id,
             peer_id,
             sync_state: sync::State::new(),
+            has_requested: false,
             state: PeerDocState::empty(),
             dirty: true,
             announce_policy: AnnouncePolicy::Unknown,
@@ -39,6 +44,17 @@ impl PeerDocConnection {
 
     pub(super) fn reset_sync_state(&mut self) {
         self.sync_state = sync::State::new();
+    }
+
+    pub(super) fn mark_requested(&mut self) {
+        if !self.has_requested {
+            self.has_requested = true;
+            self.dirty = true; // Mark as dirty since the request status changed
+        }
+    }
+
+    pub(super) fn has_requested(&self) -> bool {
+        self.has_requested
     }
 
     pub(super) fn receive_sync_message(
