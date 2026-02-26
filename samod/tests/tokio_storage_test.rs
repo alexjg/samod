@@ -1,9 +1,8 @@
 #[cfg(feature = "tokio")]
 mod tokio_tests {
-    use std::collections::HashMap;
     use tempfile::TempDir;
 
-    use samod::storage::{Storage, TokioFilesystemStorage};
+    use samod::storage::{testing::StorageTestFixture, Storage, TokioFilesystemStorage};
     use samod_core::StorageKey;
 
     fn init_logging() {
@@ -12,82 +11,32 @@ mod tokio_tests {
             .try_init();
     }
 
-    #[tokio::test]
-    async fn test_tokio_storage_basic_operations() {
-        init_logging();
+    struct TokioFilesystemStorageFixture {
+        storage: TokioFilesystemStorage,
+        _temp_dir: TempDir,
+    }
 
-        let temp_dir = TempDir::new().unwrap();
-        let storage = TokioFilesystemStorage::new(temp_dir.path());
+    impl StorageTestFixture for TokioFilesystemStorageFixture {
+        type Storage = TokioFilesystemStorage;
 
-        let key = StorageKey::from_parts(vec!["test"]).unwrap();
-        let data = b"hello world".to_vec();
+        async fn setup() -> Self {
+            let temp_dir = TempDir::new().unwrap();
+            let storage = TokioFilesystemStorage::new(temp_dir.path());
+            Self {
+                storage,
+                _temp_dir: temp_dir,
+            }
+        }
 
-        // Test put and load
-        storage.put(key.clone(), data.clone()).await;
-        let loaded = storage.load(key.clone()).await;
-        assert_eq!(loaded, Some(data));
-
-        // Test delete
-        storage.delete(key.clone()).await;
-        let loaded_after_delete = storage.load(key).await;
-        assert_eq!(loaded_after_delete, None);
+        fn storage(&self) -> &Self::Storage {
+            &self.storage
+        }
     }
 
     #[tokio::test]
-    async fn test_tokio_storage_load_range() {
+    async fn tokio_filesystem_storage_standard_tests() {
         init_logging();
-
-        let temp_dir = TempDir::new().unwrap();
-        let storage = TokioFilesystemStorage::new(temp_dir.path());
-
-        let base_key = StorageKey::from_parts(vec!["test_prefix"]).unwrap();
-
-        // Put multiple files with the same prefix
-        let key1 = StorageKey::from_parts(vec!["test_prefix", "file1"]).unwrap();
-        let key2 = StorageKey::from_parts(vec!["test_prefix", "file2"]).unwrap();
-        let key3 = StorageKey::from_parts(vec!["test_prefix", "subdir", "file3"]).unwrap();
-
-        let data1 = b"data1".to_vec();
-        let data2 = b"data2".to_vec();
-        let data3 = b"data3".to_vec();
-
-        storage.put(key1.clone(), data1.clone()).await;
-        storage.put(key2.clone(), data2.clone()).await;
-        storage.put(key3.clone(), data3.clone()).await;
-
-        // Load range
-        let loaded_range = storage.load_range(base_key).await;
-
-        let mut expected = HashMap::new();
-        expected.insert(key1, data1);
-        expected.insert(key2, data2);
-        expected.insert(key3, data3);
-
-        assert_eq!(loaded_range, expected);
-    }
-
-    #[tokio::test]
-    async fn test_tokio_storage_nonexistent_file() {
-        init_logging();
-
-        let temp_dir = TempDir::new().unwrap();
-        let storage = TokioFilesystemStorage::new(temp_dir.path());
-
-        let key = StorageKey::from_parts(vec!["nonexistent"]).unwrap();
-        let loaded = storage.load(key).await;
-        assert_eq!(loaded, None);
-    }
-
-    #[tokio::test]
-    async fn test_tokio_storage_empty_range() {
-        init_logging();
-
-        let temp_dir = TempDir::new().unwrap();
-        let storage = TokioFilesystemStorage::new(temp_dir.path());
-
-        let prefix = StorageKey::from_parts(vec!["empty_prefix"]).unwrap();
-        let loaded_range = storage.load_range(prefix).await;
-        assert!(loaded_range.is_empty());
+        samod::storage::testing::run_storage_adapter_tests::<TokioFilesystemStorageFixture>().await;
     }
 
     #[tokio::test]
@@ -129,21 +78,6 @@ mod tokio_tests {
         assert!(expected_path.exists());
 
         // Verify we can still load it through the storage interface
-        let loaded = storage.load(key).await;
-        assert_eq!(loaded, Some(data));
-    }
-
-    #[tokio::test]
-    async fn test_tokio_storage_large_data() {
-        init_logging();
-
-        let temp_dir = TempDir::new().unwrap();
-        let storage = TokioFilesystemStorage::new(temp_dir.path());
-
-        let key = StorageKey::from_parts(vec!["large_file"]).unwrap();
-        let data = vec![42u8; 1024 * 1024]; // 1MB of data
-
-        storage.put(key.clone(), data.clone()).await;
         let loaded = storage.load(key).await;
         assert_eq!(loaded, Some(data));
     }
