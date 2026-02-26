@@ -4,7 +4,11 @@ use automerge::ChangeHash;
 
 use crate::{
     ConnectionId, DocumentChanged, PeerId, StorageKey,
-    actors::{DocToHubMsg, document::io::DocumentIoTask, messages::DocToHubMsgPayload},
+    actors::{
+        DocToHubMsg,
+        document::{SyncMessageStat, io::DocumentIoTask},
+        messages::DocToHubMsgPayload,
+    },
     io::{IoTask, IoTaskId, StorageTask},
     network::PeerDocState,
 };
@@ -24,6 +28,8 @@ pub struct DocActorResult {
     pub stopped: bool,
     /// Connections which have changed state for this document
     pub peer_state_changes: HashMap<ConnectionId, PeerDocState>,
+    /// Sync message statistics for observability
+    pub sync_message_stats: Vec<SyncMessageStat>,
 }
 
 impl DocActorResult {
@@ -36,6 +42,7 @@ impl DocActorResult {
             change_events: Vec::new(),
             stopped: false,
             peer_state_changes: HashMap::new(),
+            sync_message_stats: Vec::new(),
         }
     }
 

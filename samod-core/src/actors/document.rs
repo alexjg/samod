@@ -29,6 +29,8 @@
 mod doc_actor_result;
 pub mod document_actor;
 pub use doc_actor_result::DocActorResult;
+mod sync_message_stat;
+pub use sync_message_stat::{SyncDirection, SyncMessageStat};
 mod document_actor_id;
 mod document_status;
 pub(crate) use document_status::DocumentStatus;

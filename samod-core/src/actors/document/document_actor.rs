@@ -443,9 +443,9 @@ impl DocumentActor {
 
     fn generate_sync_messages(&mut self, now: UnixTimestamp, out: &mut DocActorResult) {
         let doc_id = self.document_id.clone();
-        for (conn_id, msgs) in self
-            .doc_state
-            .generate_sync_messages(now, &mut self.peer_connections)
+        for (conn_id, msgs) in
+            self.doc_state
+                .generate_sync_messages(now, out, &mut self.peer_connections)
         {
             for msg in msgs {
                 out.send_message(DocToHubMsgPayload::SendSyncMessage {

@@ -205,7 +205,7 @@ pub use network::{
 };
 mod peer_id;
 
-pub use actors::document::{CompactionHash, DocumentActorId};
+pub use actors::document::{CompactionHash, DocumentActorId, SyncDirection, SyncMessageStat};
 pub use document_changed::DocumentChanged;
 pub use document_id::{BadDocumentId, DocumentId};
 pub mod io;

@@ -333,7 +333,9 @@ mod doc_actor_inner;
 mod doc_handle;
 mod doc_runner;
 mod io_loop;
+mod observer;
 pub use doc_handle::DocHandle;
+pub use observer::{RepoEvent, RepoObserver, StorageOperation};
 mod peer_connection_info;
 mod peer_info;
 pub use peer_connection_info::{ConnectionInfo, ConnectionState, PeerDocState};
@@ -452,8 +454,9 @@ impl Repo {
             peer_id,
             announce_policy,
             concurrency,
+            observer,
         } = builder;
-        let task_setup = TaskSetup::new(storage.clone(), peer_id, concurrency).await;
+        let task_setup = TaskSetup::new(storage.clone(), peer_id, concurrency, observer).await;
         let inner = task_setup.inner.clone();
         task_setup.spawn_tasks(runtime, storage, announce_policy);
         Self { inner }
@@ -473,8 +476,9 @@ impl Repo {
             peer_id,
             announce_policy,
             concurrency,
+            observer,
         } = builder;
-        let task_setup = TaskSetup::new(storage.clone(), peer_id, concurrency).await;
+        let task_setup = TaskSetup::new(storage.clone(), peer_id, concurrency, observer).await;
         let inner = task_setup.inner.clone();
         task_setup.spawn_tasks_local(runtime, storage, announce_policy);
         Self { inner }
@@ -782,6 +786,10 @@ impl Repo {
             Err(_) => return Err(Stopped),
         };
 
+        if let Some(obs) = inner.observer.as_ref() {
+            obs.observe(&RepoEvent::ConnectionEstablished { connection_id })
+        }
+
         let conn_handle = inner
             .connections
             .get(&connection_id)
@@ -832,6 +840,7 @@ struct Inner {
     dialers: Arc<Mutex<HashMap<DialerId, io_loop::DynDialer>>>,
     dialer_handles: HashMap<DialerId, DialerHandle>,
     acceptor_handles: HashMap<ListenerId, AcceptorHandle>,
+    observer: Option<Arc<dyn observer::RepoObserver>>,
 }
 
 impl Inner {
@@ -874,6 +883,7 @@ impl Inner {
             tracing::warn!("ignoring event on stopped hub");
             return;
         }
+        let hub_start = std::time::Instant::now();
         let now = UnixTimestamp::now();
         let HubResults {
             new_tasks,
@@ -983,6 +993,10 @@ impl Inner {
                         "connection failed, notifying waiting tasks",
                     );
 
+                    if let Some(ref obs) = self.observer {
+                        obs.observe(&observer::RepoEvent::ConnectionLost { connection_id });
+                    }
+
                     // Notify dialer/acceptor handle of disconnection
                     match owner {
                         ConnectionOwner::Dialer(dialer_id) => {
@@ -1057,6 +1071,12 @@ impl Inner {
             }
         }
 
+        if let Some(ref obs) = self.observer {
+            obs.observe(&observer::RepoEvent::HubEventProcessed {
+                duration: hub_start.elapsed(),
+            });
+        }
+
         if stopped {
             for waiter in self.stop_waiters.drain(..) {
                 let _ = waiter.send(());
@@ -1070,12 +1090,19 @@ impl Inner {
         let doc_id = args.document_id().clone();
         let (actor, init_results) = DocumentActor::new(UnixTimestamp::now(), args);
 
+        if let Some(ref obs) = self.observer {
+            obs.observe(&observer::RepoEvent::DocumentOpened {
+                document_id: doc_id.clone(),
+            });
+        }
+
         let doc_inner = Arc::new(Mutex::new(DocActorInner::new(
             doc_id.clone(),
             actor_id,
             actor,
             self.tx_to_core.clone(),
             self.tx_io.clone(),
+            self.observer.clone(),
         )));
         let handle = DocHandle::new(doc_id.clone(), doc_inner.clone());
         self.actors.insert(
@@ -1188,6 +1215,7 @@ struct TaskSetup {
     rx_from_core: UnboundedReceiver<(DocumentActorId, DocToHubMsg)>,
     rx_actor: Option<UnboundedReceiver<SpawnedActor>>,
     dialers: Arc<Mutex<HashMap<DialerId, io_loop::DynDialer>>>,
+    observer: Option<Arc<dyn observer::RepoObserver>>,
 }
 
 impl TaskSetup {
@@ -1195,6 +1223,7 @@ impl TaskSetup {
         storage: S,
         peer_id: Option<PeerId>,
         concurrency: ConcurrencyConfig,
+        observer: Option<Arc<dyn observer::RepoObserver>>,
     ) -> TaskSetup {
         let mut rng = rand::rngs::StdRng::from_rng(&mut rand::rng());
         let peer_id = peer_id.unwrap_or_else(|| PeerId::new_with_rng(&mut rng));
@@ -1236,6 +1265,7 @@ impl TaskSetup {
             dialers: dialers.clone(),
             dialer_handles: HashMap::new(),
             acceptor_handles: HashMap::new(),
+            observer: observer.clone(),
         }));
 
         TaskSetup {
@@ -1246,6 +1276,7 @@ impl TaskSetup {
             rx_from_core,
             rx_storage,
             dialers,
+            observer,
         }
     }
     fn spawn_tasks_local<
@@ -1266,6 +1297,7 @@ impl TaskSetup {
                 announce_policy,
                 self.rx_storage,
                 self.dialers.clone(),
+                self.observer.clone(),
             )
             .boxed_local(),
         );
@@ -1307,6 +1339,7 @@ impl TaskSetup {
                 announce_policy,
                 self.rx_storage,
                 self.dialers.clone(),
+                self.observer.clone(),
             )
             .boxed(),
         );
