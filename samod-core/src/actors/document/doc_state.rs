@@ -1,11 +1,12 @@
 use std::collections::HashMap;
+use std::time::Duration;
 
 use automerge::Automerge;
 
 use crate::{
     ConnectionId, DocumentId, StorageKey, UnixTimestamp,
     actors::{
-        document::DocActorResult,
+        document::{DocActorResult, SyncDirection, SyncMessageStat},
         messages::{Broadcast, DocMessage, DocToHubMsgPayload, SyncMessage},
     },
 };
@@ -182,7 +183,7 @@ impl DocState {
                     };
                     for (conn_id, msgs) in pending_sync_messages {
                         for msg in msgs {
-                            self.handle_sync_message(now, out, conn_id, peer_connections, msg);
+                            self.handle_sync_message(now, out, conn_id, peer_connections, msg, now);
                         }
                     }
                     out.send_message(DocToHubMsgPayload::DocumentStatusChanged {
@@ -212,7 +213,7 @@ impl DocState {
             });
             for (conn_id, msgs) in pending_sync_messages {
                 for msg in msgs {
-                    self.handle_sync_message(now, out, conn_id, peer_connections, msg);
+                    self.handle_sync_message(now, out, conn_id, peer_connections, msg, now);
                 }
             }
         }
@@ -237,6 +238,7 @@ impl DocState {
         connection_id: ConnectionId,
         peer_connections: &mut HashMap<ConnectionId, PeerDocConnection>,
         msg: DocMessage,
+        received_at: UnixTimestamp,
     ) {
         match msg {
             DocMessage::Ephemeral(msg) => {
@@ -257,9 +259,14 @@ impl DocState {
                     msg: Broadcast::Gossip { msg },
                 });
             }
-            DocMessage::Sync(msg) => {
-                self.handle_sync_message(now, out, connection_id, peer_connections, msg)
-            }
+            DocMessage::Sync(msg) => self.handle_sync_message(
+                now,
+                out,
+                connection_id,
+                peer_connections,
+                msg,
+                received_at,
+            ),
         };
     }
 
@@ -270,6 +277,7 @@ impl DocState {
         connection_id: ConnectionId,
         peer_connections: &mut HashMap<ConnectionId, PeerDocConnection>,
         msg: SyncMessage,
+        received_at: UnixTimestamp,
     ) {
         let Some(peer_conn) = peer_connections.get_mut(&connection_id) else {
             tracing::warn!(?connection_id, "no sync state found for message");
@@ -284,7 +292,12 @@ impl DocState {
             peer_conn.mark_requested();
         }
 
-        let transition = match &mut self.phase {
+        let bytes = match &msg {
+            SyncMessage::Request { data } | SyncMessage::Sync { data } => data.len(),
+            SyncMessage::DocUnavailable => 0,
+        };
+
+        let (transition, duration) = match &mut self.phase {
             Phase::Loading {
                 pending_sync_messages,
             } => {
@@ -292,26 +305,25 @@ impl DocState {
                     .entry(connection_id)
                     .or_default()
                     .push(msg);
-                PhaseTransition::None
+                (PhaseTransition::None, None)
             }
             Phase::Requesting(request) => {
-                request.receive_message(now, &mut self.doc, peer_conn, msg);
-                self.check_request_completion()
+                let duration = request.receive_message(now, &mut self.doc, peer_conn, msg);
+                (self.check_request_completion(), duration)
             }
             Phase::Ready(ready) => {
                 let heads_before = self.doc.get_heads();
-                ready.receive_sync_message(now, &mut self.doc, peer_conn, msg);
+                let duration = ready.receive_sync_message(now, &mut self.doc, peer_conn, msg);
                 let heads_after = self.doc.get_heads();
                 if heads_before != heads_after {
                     out.emit_doc_changed(heads_after);
                 }
-                PhaseTransition::None
+                (PhaseTransition::None, duration)
             }
             Phase::NotFound => match msg {
                 SyncMessage::Request { data } => {
                     tracing::trace!("received request whilst in notfound, restarting request");
                     let request = Request::new(self.document_id.clone(), peer_connections.values());
-                    // Apply transition first, then reprocess the message
                     self.handle_phase_transition(out, PhaseTransition::ToRequesting(request));
                     self.handle_sync_message(
                         now,
@@ -319,12 +331,12 @@ impl DocState {
                         connection_id,
                         peer_connections,
                         SyncMessage::Request { data },
+                        received_at,
                     );
                     return;
                 }
                 SyncMessage::Sync { data } => {
                     tracing::trace!("received sync whilst in notfound, moving to ready");
-                    // Apply transition first, then reprocess the message
                     self.handle_phase_transition(out, PhaseTransition::ToReady);
                     self.handle_sync_message(
                         now,
@@ -332,12 +344,30 @@ impl DocState {
                         connection_id,
                         peer_connections,
                         SyncMessage::Sync { data },
+                        received_at,
                     );
                     return;
                 }
-                SyncMessage::DocUnavailable => PhaseTransition::None,
+                SyncMessage::DocUnavailable => (PhaseTransition::None, None),
             },
         };
+
+        if let Some(duration) = duration {
+            let queue_duration = if now >= received_at {
+                now - received_at
+            } else {
+                Duration::ZERO
+            };
+            if bytes > 0 {
+                out.sync_message_stats.push(SyncMessageStat {
+                    connection_id,
+                    direction: SyncDirection::Received,
+                    bytes,
+                    duration,
+                    queue_duration,
+                });
+            }
+        }
 
         self.handle_phase_transition(out, transition);
     }
@@ -345,24 +375,41 @@ impl DocState {
     pub fn generate_sync_messages(
         &mut self,
         now: UnixTimestamp,
+        out: &mut DocActorResult,
         peer_connections: &mut HashMap<ConnectionId, PeerDocConnection>,
     ) -> HashMap<ConnectionId, Vec<SyncMessage>> {
         let mut result: HashMap<ConnectionId, Vec<SyncMessage>> = HashMap::new();
         for (conn_id, peer_conn) in peer_connections {
-            match &mut self.phase {
-                Phase::Loading { .. } | Phase::NotFound => {}
-                Phase::Requesting(request) => {
-                    if let Some(msg) = request.generate_message(now, &self.doc, peer_conn) {
-                        tracing::debug!(?conn_id, peer_id=?peer_conn.peer_id, ?msg, "sending sync msg");
-                        result.entry(*conn_id).or_default().push(msg);
-                    }
+            if let Phase::Loading {
+                pending_sync_messages,
+            } = &self.phase
+            {
+                out.pending_sync_messages = pending_sync_messages.values().map(|v| v.len()).sum();
+                continue;
+            }
+
+            let generated = match &mut self.phase {
+                Phase::Ready(ready) => ready.generate_sync_message(now, &mut self.doc, peer_conn),
+                Phase::Requesting(request) => request.generate_message(now, &self.doc, peer_conn),
+                Phase::NotFound | Phase::Loading { .. } => None,
+            };
+
+            if let Some((msg, duration)) = generated {
+                let bytes = match &msg {
+                    SyncMessage::Request { data } | SyncMessage::Sync { data } => data.len(),
+                    SyncMessage::DocUnavailable => 0,
+                };
+                if bytes > 0 {
+                    out.sync_message_stats.push(SyncMessageStat {
+                        connection_id: *conn_id,
+                        direction: SyncDirection::Generated,
+                        bytes,
+                        duration,
+                        queue_duration: Duration::ZERO,
+                    });
                 }
-                Phase::Ready(ready) => {
-                    if let Some(msg) = ready.generate_sync_message(now, &mut self.doc, peer_conn) {
-                        tracing::debug!(?conn_id, peer_id=?peer_conn.peer_id, ?msg, "sending sync msg");
-                        result.entry(*conn_id).or_default().push(msg);
-                    }
-                }
+                tracing::debug!(?conn_id, peer_id=?peer_conn.peer_id, ?msg, "sending sync msg");
+                result.entry(*conn_id).or_default().push(msg);
             }
         }
         result

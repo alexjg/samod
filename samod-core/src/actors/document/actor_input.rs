@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::{
-    DialerId,
+    DialerId, UnixTimestamp,
     actors::{
         document::io::DocumentIoResult,
         messages::{DocDialerState, DocMessage, HubToDocMsgPayload},
@@ -20,6 +20,7 @@ pub(crate) enum ActorInput {
     HandleDocMessage {
         connection_id: crate::ConnectionId,
         message: DocMessage,
+        received_at: UnixTimestamp,
     },
     NewConnection {
         connection_id: crate::ConnectionId,
@@ -45,9 +46,11 @@ impl From<HubToDocMsgPayload> for ActorInput {
             HubToDocMsgPayload::HandleDocMessage {
                 connection_id,
                 message,
+                received_at,
             } => ActorInput::HandleDocMessage {
                 connection_id,
                 message,
+                received_at,
             },
             HubToDocMsgPayload::NewConnection {
                 connection_id,

@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use automerge::{Automerge, sync};
 
 use crate::{UnixTimestamp, actors::messages::SyncMessage};
@@ -18,22 +20,27 @@ impl Ready {
         doc: &mut Automerge,
         conn: &mut PeerDocConnection,
         msg: SyncMessage,
-    ) {
+    ) -> Option<Duration> {
         match msg {
             SyncMessage::Request { data } | SyncMessage::Sync { data } => {
                 let msg = match sync::Message::decode(&data) {
                     Ok(m) => m,
                     Err(e) => {
                         tracing::warn!(err=?e, conn_id=?conn.connection_id, "failed to decode sync message");
-                        return;
+                        return None;
                     }
                 };
-                if let Err(e) = conn.receive_sync_message(now, doc, msg) {
-                    tracing::warn!(conn_id=?conn.connection_id, err=?e, "failed to process sync message");
+                match conn.receive_sync_message(now, doc, msg) {
+                    Ok(duration) => Some(duration),
+                    Err(e) => {
+                        tracing::warn!(conn_id=?conn.connection_id, err=?e, "failed to process sync message");
+                        None
+                    }
                 }
             }
             SyncMessage::DocUnavailable => {
                 tracing::debug!("received doc-unavailable message whilst we have a doc");
+                None
             }
         }
     }
@@ -43,7 +50,7 @@ impl Ready {
         now: UnixTimestamp,
         doc: &mut Automerge,
         conn: &mut PeerDocConnection,
-    ) -> Option<SyncMessage> {
+    ) -> Option<(SyncMessage, Duration)> {
         if conn.their_heads().is_none()
             && !conn.has_requested()
             && conn.announce_policy() != AnnouncePolicy::Announce
@@ -54,6 +61,6 @@ impl Ready {
             return None;
         }
         conn.generate_sync_message(now, doc)
-            .map(|msg| SyncMessage::Sync { data: msg.encode() })
+            .map(|(msg, duration)| (SyncMessage::Sync { data: msg.encode() }, duration))
     }
 }
