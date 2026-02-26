@@ -360,6 +360,8 @@ use crate::{
 };
 pub use transport::Transport;
 pub mod runtime;
+#[cfg(feature = "tokio")]
+pub mod tokio_io;
 mod unbounded;
 pub mod websocket;
 

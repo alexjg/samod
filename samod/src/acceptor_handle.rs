@@ -75,6 +75,19 @@ impl AcceptorHandle {
         self.repo.accept_on_listener(self.listener_id, transport)
     }
 
+    /// Accept the length delimited framed connection created by
+    /// [`TcpDialer`](crate::tokio_io::TcpDialer). See the documentation for
+    /// that type for examples.
+    #[cfg(feature = "tokio")]
+    pub fn accept_tokio_io<S>(&self, io: S) -> Result<(), Stopped>
+    where
+        S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + Unpin + 'static,
+    {
+        use crate::Transport;
+        self.repo
+            .accept_on_listener(self.listener_id, Transport::from_tokio_io(io))
+    }
+
     /// Returns a stream of lifecycle events for this acceptor.
     ///
     /// The stream yields events for client connections and disconnections.
