@@ -8,6 +8,8 @@ mod filesystem;
 mod in_memory;
 pub use in_memory::InMemoryStorage;
 
+pub mod testing;
+
 #[cfg(feature = "tokio")]
 pub use filesystem::tokio::FilesystemStorage as TokioFilesystemStorage;
 
