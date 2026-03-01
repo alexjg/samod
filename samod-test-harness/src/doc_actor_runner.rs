@@ -26,6 +26,7 @@ pub(crate) struct DocActorRunner {
     ephemera: Vec<Vec<u8>>,
     doc_changed: Vec<DocumentChanged>,
     peer_doc_state_changes: Vec<HashMap<ConnectionId, PeerDocState>>,
+    persisted_events: Vec<Vec<automerge::ChangeHash>>,
 }
 
 impl DocActorRunner {
@@ -42,6 +43,7 @@ impl DocActorRunner {
             ephemera: Vec::new(),
             doc_changed: Vec::new(),
             peer_doc_state_changes: Vec::new(),
+            persisted_events: Vec::new(),
         };
         runner.enqueue_events(results);
         runner
@@ -98,6 +100,7 @@ impl DocActorRunner {
             change_events,
             stopped: _,
             peer_state_changes,
+            persisted_events,
         } = result;
         for task in io_tasks {
             self.inbox.push_back(ActorEvent::Io(task));
@@ -109,6 +112,9 @@ impl DocActorRunner {
         self.doc_changed.extend(change_events);
         if !peer_state_changes.is_empty() {
             self.peer_doc_state_changes.push(peer_state_changes);
+        }
+        for event in persisted_events {
+            self.persisted_events.push(event.persisted_heads);
         }
     }
 

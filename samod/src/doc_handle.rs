@@ -5,7 +5,7 @@ use std::{
 
 use automerge::{Automerge, ReadDoc};
 use futures::{Stream, StreamExt};
-use samod_core::{AutomergeUrl, DocumentChanged, DocumentId};
+use samod_core::{AutomergeUrl, DocumentChanged, DocumentId, DocumentPersisted};
 
 use crate::{ConnectionId, doc_actor_inner::DocActorInner, peer_connection_info::PeerDocState};
 
@@ -83,6 +83,11 @@ impl DocHandle {
     /// Listen for changes to the document
     pub fn changes(&self) -> impl Stream<Item = DocumentChanged> {
         self.inner.lock().unwrap().create_change_listener()
+    }
+
+    /// Listen for persistence events
+    pub fn persisted(&self) -> impl Stream<Item = DocumentPersisted> {
+        self.inner.lock().unwrap().create_persisted_listener()
     }
 
     /// Send an ephemeral message which will be broadcast to all other peers who have this document open

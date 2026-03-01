@@ -14,6 +14,9 @@ pub use compaction_hash::CompactionHash;
 #[derive(Debug)]
 pub(super) struct OnDiskState {
     last_saved_heads: Option<Vec<automerge::ChangeHash>>,
+    /// The heads that are currently being written to storage. Once all running
+    /// puts complete, these become the confirmed persisted heads.
+    pending_persist_heads: Option<Vec<automerge::ChangeHash>>,
     on_disk: HashSet<StorageKey>,
     compaction: Option<Compaction>,
     deletions: HashSet<StorageKey>,
@@ -31,6 +34,7 @@ impl OnDiskState {
     pub(super) fn new() -> Self {
         Self {
             last_saved_heads: None,
+            pending_persist_heads: None,
             on_disk: HashSet::new(),
             compaction: None,
             deletions: HashSet::new(),
@@ -86,7 +90,13 @@ impl OnDiskState {
             self.running_deletes.insert(delete_id, deletion);
         }
 
-        self.last_saved_heads = Some(doc.get_heads());
+        let current_heads = doc.get_heads();
+        self.last_saved_heads = Some(current_heads.clone());
+        // Track the heads we're persisting so we can emit a persisted event
+        // when all running puts complete.
+        if !self.running_puts.is_empty() {
+            self.pending_persist_heads = Some(current_heads);
+        }
     }
 
     pub(super) fn is_flushed(&self) -> bool {
@@ -97,7 +107,11 @@ impl OnDiskState {
         self.running_puts.contains_key(&task_id) || self.running_deletes.contains_key(&task_id)
     }
 
-    pub(super) fn task_complete(&mut self, task_id: IoTaskId, result: StorageResult) {
+    pub(super) fn task_complete(
+        &mut self,
+        task_id: IoTaskId,
+        result: StorageResult,
+    ) -> Option<Vec<automerge::ChangeHash>> {
         match result {
             StorageResult::Put => {
                 if let Some(compaction_key) = self.running_puts.remove(&task_id) {
@@ -115,6 +129,12 @@ impl OnDiskState {
                 }
             }
             _ => panic!("unexpected storage result"),
+        }
+
+        if self.running_puts.is_empty() {
+            self.pending_persist_heads.take()
+        } else {
+            None
         }
     }
 

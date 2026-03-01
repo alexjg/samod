@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use automerge::ChangeHash;
 
 use crate::{
-    ConnectionId, DocumentChanged, PeerId, StorageKey,
+    ConnectionId, DocumentChanged, DocumentPersisted, PeerId, StorageKey,
     actors::{DocToHubMsg, document::io::DocumentIoTask, messages::DocToHubMsgPayload},
     io::{IoTask, IoTaskId, StorageTask},
     network::PeerDocState,
@@ -20,6 +20,8 @@ pub struct DocActorResult {
     pub ephemeral_messages: Vec<Vec<u8>>,
     /// Change events
     pub change_events: Vec<DocumentChanged>,
+    /// Persisted events (emitted when changes are confirmed written to storage)
+    pub persisted_events: Vec<DocumentPersisted>,
     /// Whether this document actor is stopped
     pub stopped: bool,
     /// Connections which have changed state for this document
@@ -34,6 +36,7 @@ impl DocActorResult {
             outgoing_messages: Vec::new(),
             ephemeral_messages: Vec::new(),
             change_events: Vec::new(),
+            persisted_events: Vec::new(),
             stopped: false,
             peer_state_changes: HashMap::new(),
         }
@@ -45,6 +48,11 @@ impl DocActorResult {
 
     pub(crate) fn emit_doc_changed(&mut self, new_heads: Vec<ChangeHash>) {
         self.change_events.push(DocumentChanged { new_heads });
+    }
+
+    pub(crate) fn emit_doc_persisted(&mut self, persisted_heads: Vec<ChangeHash>) {
+        self.persisted_events
+            .push(DocumentPersisted { persisted_heads });
     }
 
     /// Send a message back to the hub
