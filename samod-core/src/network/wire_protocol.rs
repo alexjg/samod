@@ -111,7 +111,7 @@ impl WireMessage {
                         fields.insert(key, FieldValue::Bytes(decoder.bytes()?.to_vec()));
                     }
                 }
-                "supportedProtocolVersions" | "add" | "remove" => {
+                "supportedProtocolVersions" => {
                     let array_len = decoder.array()?.ok_or(DecodeError::InvalidFormat)?;
                     let mut strings = Vec::new();
                     for _ in 0..array_len {
@@ -119,11 +119,26 @@ impl WireMessage {
                     }
                     fields.insert(key, FieldValue::StringArray(strings));
                 }
+                "add" | "remove" => {
+                    // These fields may be undefined/null when sent by JS clients
+                    // (e.g. `remove: undefined` in a subscribe-only message), so we
+                    // need to check the CBOR type before attempting to decode as array.
+                    if decoder.probe().array().is_ok() {
+                        let array_len = decoder.array()?.ok_or(DecodeError::InvalidFormat)?;
+                        let mut strings = Vec::new();
+                        for _ in 0..array_len {
+                            strings.push(decoder.str()?.to_string());
+                        }
+                        fields.insert(key, FieldValue::StringArray(strings));
+                    } else {
+                        decoder.skip()?;
+                    }
+                }
                 "data" => {
                     fields.insert(key, FieldValue::Bytes(decoder.bytes()?.to_vec()));
                 }
                 "count" | "timestamp" => {
-                    fields.insert(key, FieldValue::Uint(decoder.u64()?));
+                    fields.insert(key, FieldValue::Uint(decode_u64_or_f64(&mut decoder)?));
                 }
                 "metadata" => {
                     let metadata = decode_metadata(&mut decoder)?;
@@ -288,10 +303,13 @@ impl WireMessage {
                 let remove = fields
                     .get("remove")
                     .and_then(|v| v.as_string_array())
-                    .ok_or(DecodeError::MissingField("remove".to_string()))?
-                    .iter()
-                    .map(|s| StorageId::from(s.as_str()))
-                    .collect::<Vec<_>>();
+                    .map(|strings| {
+                        strings
+                            .iter()
+                            .map(|s| StorageId::from(s.as_str()))
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
 
                 Ok(Self::RemoteSubscriptionChange {
                     sender_id,
@@ -534,6 +552,18 @@ impl FieldValue {
 }
 
 // Helper functions
+
+/// Decode a CBOR value as u64, accepting both CBOR unsigned integers and CBOR floats.
+/// JavaScript's `cbor-x` may encode integer-valued numbers (like `Date.now()` timestamps
+/// or counters) as CBOR float64 rather than CBOR unsigned integers.
+fn decode_u64_or_f64(decoder: &mut minicbor::Decoder) -> Result<u64, DecodeError> {
+    if decoder.probe().u64().is_ok() {
+        Ok(decoder.u64()?)
+    } else {
+        Ok(decoder.f64()? as u64)
+    }
+}
+
 fn get_peer_id(fields: &HashMap<String, FieldValue>, key: &str) -> Result<PeerId, DecodeError> {
     let peer_id_str = fields
         .get(key)
@@ -622,7 +652,7 @@ fn decode_new_heads(
                     }
                 }
                 "timestamp" => {
-                    timestamp = decoder.u64()?;
+                    timestamp = decode_u64_or_f64(decoder)?;
                 }
                 _ => {
                     decoder.skip()?;
