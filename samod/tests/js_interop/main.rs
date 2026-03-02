@@ -133,6 +133,60 @@ async fn two_js_clients_can_send_ephemera_through_rust_server() {
     assert_eq!(msg, "hello");
 }
 
+/// Test that a JS client which uses remote heads subscriptions (sending a
+/// `remote-subscription-change` message with only an `add` field and no `remove`) doesn't
+/// cause the Rust server to drop the connection. Before the fix, the missing `remove` field
+/// caused a decode error that terminated the connection.
+#[tokio::test]
+async fn js_client_with_remote_heads_subscription_can_sync_through_rust_server() {
+    init_logging();
+    let server = start_rust_server().await;
+    let js = JsWrapper::create().await.unwrap();
+
+    // This JS client enables remote heads gossiping and subscribes to a storage ID.
+    // When it connects, it sends a `remote-subscription-change` message with only `add`
+    // (no `remove` field) to the Rust server.
+    let (doc_id, heads, _child1) = js
+        .subscribe_and_create_doc(server.port, "1fcd2698-3426-4288-9c47-85364db5073b")
+        .await
+        .unwrap();
+
+    // If the Rust server choked on the subscription message and dropped the connection,
+    // the document won't have been synced and this fetch will fail.
+    let fetched_heads = js.fetch_doc(server.port, doc_id).await.unwrap();
+
+    assert_eq!(heads, fetched_heads);
+}
+
+/// Test that a JS client sending `remote-heads-changed` messages (which contain timestamps
+/// encoded as CBOR float64 by cbor-x) doesn't cause the Rust server to drop the connection.
+///
+/// The setup: a JS client first syncs a document with a JS server (which has a storage ID),
+/// storing remote heads info with a `Date.now()` timestamp. It then connects to the Rust server,
+/// which becomes a "generous peer", triggering `addGenerousPeer` to send a `remote-heads-changed`
+/// message to the Rust server with the f64 timestamp.
+#[tokio::test]
+async fn js_client_sending_remote_heads_changed_does_not_break_rust_server() {
+    init_logging();
+    let js = JsWrapper::create().await.unwrap();
+    let js_server = js.start_server().await.unwrap();
+    let rust_server = start_rust_server().await;
+
+    // This JS client first syncs with the JS server (building up remote heads info),
+    // then connects to the Rust server, which triggers a `remote-heads-changed` message
+    // with a float64-encoded timestamp being sent to the Rust server.
+    let (doc_id, heads, _child1) = js
+        .create_and_relay_heads(js_server.port, rust_server.port)
+        .await
+        .unwrap();
+
+    // If the Rust server choked on the remote-heads-changed message (f64 timestamp),
+    // the document won't have been synced and this fetch will fail.
+    let fetched_heads = js.fetch_doc(rust_server.port, doc_id).await.unwrap();
+
+    assert_eq!(heads, fetched_heads);
+}
+
 async fn samod_connected_to_js_server(port: u16, peer_id: Option<String>) -> Repo {
     let mut builder = Repo::build_tokio();
     if let Some(peer_id) = peer_id {
