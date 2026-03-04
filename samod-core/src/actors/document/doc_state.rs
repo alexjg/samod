@@ -161,10 +161,18 @@ impl DocState {
         //     .add_on_disk(snapshots.into_keys().chain(incrementals.into_keys()));
         if matches!(self.phase, Phase::Loading { .. }) {
             if self.doc.get_heads().is_empty() {
-                let eligible_conns = peer_connections
+                    // Check if there are pending sync messages from peers that may
+                    // contain the document data. If so, we must process them before
+                    // deciding the document is not found.
+                    let pending_msg_count = if let Phase::Loading { pending_sync_messages } = &self.phase {
+                        pending_sync_messages.values().map(|v| v.len()).sum::<usize>()
+                    } else {
+                        0
+                    };
+                    let eligible_conns = peer_connections
                     .values()
                     .any(|p| p.announce_policy() != AnnouncePolicy::DontAnnounce);
-                if eligible_conns || self.any_dialer_connecting {
+                if eligible_conns || self.any_dialer_connecting || pending_msg_count > 0 {
                     tracing::debug!(
                         eligible_conns,
                         self.any_dialer_connecting,
