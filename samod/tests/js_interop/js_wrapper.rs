@@ -2,16 +2,23 @@ use std::{io::IsTerminal, path::PathBuf};
 
 use futures::{Stream, StreamExt};
 use samod::DocumentId;
-use tokio::{io::AsyncBufReadExt, process::Command};
+use tokio::{io::AsyncBufReadExt, process::Command, sync::OnceCell};
 
 const INTEROP_SERVER_PATH: &str = "interop-test-server";
+
+static JS_DEPS_INITIALIZED: OnceCell<Result<(), String>> = OnceCell::const_new();
 
 pub(super) struct JsWrapper;
 
 impl JsWrapper {
     pub(super) async fn create() -> eyre::Result<Self> {
-        ensure_js_deps().await?;
-        Ok(Self)
+        let result = JS_DEPS_INITIALIZED
+            .get_or_init(|| async { ensure_js_deps().await.map_err(|e| e.to_string()) })
+            .await;
+        match result {
+            Ok(()) => Ok(Self),
+            Err(e) => Err(eyre::eyre!("{}", e)),
+        }
     }
 
     pub(super) async fn start_server(&self) -> eyre::Result<RunningJsServer> {
