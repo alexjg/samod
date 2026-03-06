@@ -121,7 +121,11 @@ impl DocumentActor {
         message: HubToDocMsg,
     ) -> Result<DocActorResult, DocumentError> {
         if self.run_state == RunState::Stopped {
-            panic!("document actor is stopped");
+            tracing::warn!(actor_id=%self.id, "ignoring message on stopped document actor");
+            return Ok(DocActorResult {
+                stopped: true,
+                ..Default::default()
+            });
         }
         let mut out = DocActorResult::default();
         self.handle_input(now, ActorInput::from(message.0), &mut out);
@@ -146,7 +150,10 @@ impl DocumentActor {
         io_result: IoResult<DocumentIoResult>,
     ) -> Result<DocActorResult, DocumentError> {
         if self.run_state == RunState::Stopped {
-            panic!("document actor is stopped");
+            tracing::warn!(actor_id=%self.id, "ignoring IO completion on stopped document actor");
+            let mut result = DocActorResult::new();
+            result.stopped = true;
+            return Ok(result);
         }
         let mut result = DocActorResult::new();
         let input = ActorInput::IoComplete(io_result);
@@ -388,7 +395,7 @@ impl DocumentActor {
 
     fn step(&mut self, now: UnixTimestamp, out: &mut DocActorResult) {
         if self.run_state == RunState::Stopped {
-            panic!("document actor is stopped");
+            return;
         }
         if self.run_state == RunState::Stopping {
             if self.on_disk_state.is_flushed() {
