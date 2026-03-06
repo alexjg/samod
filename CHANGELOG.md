@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- `TcpDialer` now simply takes a `Url` parameter, rather than a host and a port or a socket address.
+- Added a convenience `repo.dial_tcp()` method to simplify construction of `TcpDialer`. 
+
 ## 0.8.0 - 2024-03-06
 
 The main focus of this release is a new connection management API which
