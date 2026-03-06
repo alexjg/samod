@@ -4,7 +4,7 @@
 
 - `TcpDialer` now simply takes a `Url` parameter, rather than a host and a port or a socket address.
 - Added a convenience `repo.dial_tcp()` method to simplify construction of `TcpDialer`. 
-- Allow documents up to 8gb size instead of Tokio's default 8mb frame size
+- Allow documents syncing over the TCP transport to be up to 8gb size instead of Tokio's default 8mb frame size
 
 ## 0.8.0 - 2024-03-06
 
