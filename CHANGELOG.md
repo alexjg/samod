@@ -138,6 +138,8 @@ fn sleep(&self, duration: Duration) -> impl Future<Output = ()> + Send {
 * A bug where requests which were forwarded across peers who were configured
   to not announce documents would fail to resolve on the original requestor
 * Some interoperability bugs with the JS implementation
+* A bug where if a connection failed during establishment the io loop would
+  crash, causing the whole repo to stop working
 
 ### Breaking Changes
 
