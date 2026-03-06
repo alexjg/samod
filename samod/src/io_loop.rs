@@ -268,7 +268,14 @@ async fn drive_connection(
         let event = HubEvent::connection_lost(connection_id);
         inner.lock().unwrap().handle_event(event);
     }
-    if let Err(e) = sink.close().await {
+    // Skip closing the sink if sending already failed. Transport::new wraps
+    // sinks in SinkMapErr whose error mapper is FnOnce — it is consumed on
+    // the first error. If send failed (consuming the mapper) and close also
+    // errors, SinkMapErr panics with "polled MapErr after completion".
+    // See https://github.com/paulsonnentag/automerge-rust-sync-server/issues/8
+    if !matches!(result, ConnFinishedReason::ErrorSending(_))
+        && let Err(e) = sink.close().await
+    {
         tracing::error!(err=?e, "error closing sink");
     }
     conn_handle.notify_finished(result);
