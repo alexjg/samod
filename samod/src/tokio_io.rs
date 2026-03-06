@@ -111,7 +111,7 @@ impl Dialer for TcpDialer {
         Result<crate::Transport, Box<dyn std::error::Error + Send + Sync + 'static>>,
     > {
         let host = self.host.clone();
-        let port = self.port.clone();
+        let port = self.port;
         async move {
             let io = tokio::net::TcpStream::connect((host, port)).await?;
             let transport = Transport::from_tokio_io(io);
@@ -134,7 +134,7 @@ impl Repo {
     /// # Arguments
     ///
     /// * `url` - The TCP URL to connect to (e.g. `"tcp://sync.example.com"`).
-    ///           It must have the scheme `tcp://`, and must have a valid [`Url::host`] and [`Url::port`].
+    ///   It must have the scheme `tcp://`, and must have a valid [`Url::host`] and [`Url::port`].
     /// * `backoff` - Backoff configuration for reconnection attempts.
     ///
     /// # Returns
