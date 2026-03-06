@@ -59,7 +59,11 @@ impl Transport {
         use futures::{SinkExt, StreamExt, TryStreamExt};
         use tokio_util::codec::{Framed, LengthDelimitedCodec};
 
-        let framed = Framed::new(io, LengthDelimitedCodec::new());
+        // The default Tokio frame size is 8mb, this increases it to 8gb. Documents above that size won't sync.
+        let codec = LengthDelimitedCodec::builder()
+            .max_frame_length(8 * 1024 * 1024 * 1024).new_codec();
+
+        let framed = Framed::new(io, codec);
         let (msg_sink, msg_stream) = framed.split();
         let msg_stream = msg_stream.map(|result| result.map(|b| b.to_vec()));
         let msg_sink = msg_sink.with(|msg: Vec<u8>| {
