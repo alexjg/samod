@@ -111,11 +111,15 @@ impl State {
         self.connections.insert(connection_id, connection_state);
     }
 
-    pub(crate) fn remove_connection(
+    fn remove_connection<'a, A: Into<RemoveConnArgs<'a>>>(
         &mut self,
         results: &mut HubResults,
-        connection_id: &ConnectionId,
+        args: A,
     ) -> Option<Connection> {
+        let RemoveConnArgs {
+            connection_id,
+            notify_doc_actors,
+        } = args.into();
         let conn = self.connections.remove(connection_id)?;
         let msg = match conn.owner() {
             ConnectionOwner::Dialer(dialer_id) => {
@@ -126,10 +130,12 @@ impl State {
             }
         };
         results.emit_disconnect_event(*connection_id, conn.owner(), msg);
-        self.notify_doc_actors_of_removed_connection(results, *connection_id);
         results.emit_io_action(HubIoAction::Disconnect {
             connection_id: *connection_id,
         });
+        if notify_doc_actors {
+            self.notify_doc_actors_of_removed_connection(results, *connection_id);
+        }
         Some(conn)
     }
 
@@ -382,7 +388,11 @@ impl State {
         event: HubEvent,
         results: &mut HubResults,
     ) {
-        assert!(self.run_state != RunState::Stopped);
+        if self.run_state == RunState::Stopped {
+            tracing::warn!("ignoring event on stopped hub");
+            results.stopped = true;
+            return;
+        }
         let event_type = event.event_type_for_metrics();
         match event.payload {
             HubEventPayload::IoComplete(io_completion) => {
@@ -405,6 +415,10 @@ impl State {
                                     HubToDocMsgPayload::Terminate,
                                 );
                             }
+                            // Close all connections, dialers, and listeners so
+                            // no further network events can arrive after we
+                            // transition to Stopped.
+                            self.close_all_network_state(results);
                         }
                     }
                     HubInput::Command {
@@ -807,6 +821,42 @@ impl State {
                 actor_info.actor_id,
                 HubToDocMsgPayload::ConnectionClosed { connection_id },
             );
+        }
+    }
+
+    /// Tear down all network state: connections, dialers, and listeners.
+    ///
+    /// Called during shutdown so that no further network events can arrive
+    /// after the hub transitions to `Stopped`.
+    ///
+    /// Unlike the normal `remove_connection` path, this does *not* notify
+    /// document actors of the closed connections — they have already been
+    /// sent a `Terminate` message and may have already stopped.
+    fn close_all_network_state(&mut self, results: &mut HubResults) {
+        // Close all connections without notifying document actors.
+        let conn_ids: Vec<_> = self.connections.keys().copied().collect();
+        for conn_id in conn_ids {
+            self.remove_connection(
+                results,
+                RemoveConnArgs {
+                    connection_id: &conn_id,
+                    notify_doc_actors: false,
+                },
+            );
+        }
+
+        // Remove all dialers.
+        let dialer_ids: Vec<_> = self.dialers.keys().copied().collect();
+        for dialer_id in dialer_ids {
+            self.dialers.remove(&dialer_id);
+            tracing::debug!(?dialer_id, "dialer removed during shutdown");
+        }
+
+        // Remove all listeners.
+        let listener_ids: Vec<_> = self.listeners.keys().copied().collect();
+        for listener_id in listener_ids {
+            self.listeners.remove(&listener_id);
+            tracing::debug!(?listener_id, "listener removed during shutdown");
         }
     }
 
@@ -1252,6 +1302,20 @@ impl State {
         };
         if let Some(dialer) = self.dialers.get_mut(&dialer_id) {
             dialer.reset_backoff();
+        }
+    }
+}
+
+struct RemoveConnArgs<'a> {
+    connection_id: &'a ConnectionId,
+    notify_doc_actors: bool,
+}
+
+impl<'a> From<&'a ConnectionId> for RemoveConnArgs<'a> {
+    fn from(connection_id: &'a ConnectionId) -> Self {
+        Self {
+            connection_id,
+            notify_doc_actors: true,
         }
     }
 }

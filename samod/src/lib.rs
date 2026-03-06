@@ -879,8 +879,10 @@ impl Inner {
 
     #[tracing::instrument(skip(self, event), fields(local_peer_id=%self.hub.peer_id()))]
     fn handle_event(&mut self, event: HubEvent) {
+        // The hub itself will gracefully ignore events after it has stopped,
+        // but we short-circuit here to avoid unnecessary work.
         if self.hub.is_stopped() {
-            tracing::warn!("ignoring event on stopped hub");
+            tracing::trace!("ignoring event on stopped hub");
             return;
         }
         let hub_start = std::time::Instant::now();
