@@ -37,24 +37,71 @@ use crate::{Dialer, Repo, Transport};
 ///
 /// // Now make a client which dials the server
 /// let repo: Repo = Repo::build_tokio().load().await;
-/// let dialer = TcpDialer::new(url::Url::parse("tcp://0.0.0.0:0").unwrap());
+/// let dialer = TcpDialer::new(url::Url::parse("tcp://0.0.0.0:0").unwrap()).unwrap();
 /// repo.dial(BackoffConfig::default(), Arc::new(dialer)).unwrap();
 /// # }
 /// ```
 pub struct TcpDialer {
-    host: Url,
+    host: String,
+    port: u16,
 }
 
+pub enum TcpDialerError {
+    InvalidUrl(String),
+    RepoStopped,
+}
+
+impl std::fmt::Display for TcpDialerError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self {
+            TcpDialerError::InvalidUrl(message) => {
+                write!(f, "Error creating TcpDialer: {}", message)
+            }
+            TcpDialerError::RepoStopped => write!(f, "{}", crate::Stopped {}),
+        }
+    }
+}
+
+impl std::fmt::Debug for TcpDialerError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{self}")
+    }
+}
+
+impl std::error::Error for TcpDialerError {}
+
 impl TcpDialer {
-    /// Create a dialer which will resolve the given [Url].
-    pub fn new(url: Url) -> Self {
-        Self { host: url }
+    /// Create a dialer which will resolve the given [`Url`].
+    /// The [`Url`] must have the scheme `tcp://`, and must have a valid [`Url::host`] and [`Url::port`].
+    pub fn new(url: Url) -> Result<Self, TcpDialerError> {
+        if url.scheme() != "tcp" {
+            return Err(TcpDialerError::InvalidUrl(format!(
+                "Provided URL {url} is not of scheme tcp://!"
+            )));
+        };
+
+        let Some(host) = url.host_str() else {
+            return Err(TcpDialerError::InvalidUrl(format!(
+                "No host provided for {url}!"
+            )));
+        };
+
+        let Some(port) = url.port() else {
+            return Err(TcpDialerError::InvalidUrl(format!(
+                "No port provided for {url}!"
+            )));
+        };
+
+        Ok(Self {
+            host: host.to_string(),
+            port,
+        })
     }
 }
 
 impl Dialer for TcpDialer {
     fn url(&self) -> url::Url {
-        self.host.clone()
+        Url::parse(&format!("tcp://{}:{}", self.host, self.port)).unwrap()
     }
 
     fn connect(
@@ -63,35 +110,9 @@ impl Dialer for TcpDialer {
         'static,
         Result<crate::Transport, Box<dyn std::error::Error + Send + Sync + 'static>>,
     > {
-        let url = self.host.clone();
+        let host = self.host.clone();
+        let port = self.port.clone();
         async move {
-            if url.scheme() != "tcp" {
-                return Err::<_, Box<dyn std::error::Error + Send + Sync + 'static>>(Box::new(
-                    std::io::Error::new(
-                        std::io::ErrorKind::InvalidInput,
-                        format!("Provided URL {url} is not of scheme tcp://!"),
-                    ),
-                ));
-            };
-
-            let Some(host) = url.host_str() else {
-                return Err::<_, Box<dyn std::error::Error + Send + Sync + 'static>>(Box::new(
-                    std::io::Error::new(
-                        std::io::ErrorKind::InvalidInput,
-                        format!("No host provided for {url}!"),
-                    ),
-                ));
-            };
-
-            let Some(port) = url.port() else {
-                return Err::<_, Box<dyn std::error::Error + Send + Sync + 'static>>(Box::new(
-                    std::io::Error::new(
-                        std::io::ErrorKind::InvalidInput,
-                        format!("No port provided for {url}!"),
-                    ),
-                ));
-            };
-
             let io = tokio::net::TcpStream::connect((host, port)).await?;
             let transport = Transport::from_tokio_io(io);
             Ok(transport)
@@ -113,6 +134,7 @@ impl Repo {
     /// # Arguments
     ///
     /// * `url` - The TCP URL to connect to (e.g. `"tcp://sync.example.com"`).
+    ///           It must have the scheme `tcp://`, and must have a valid [`Url::host`] and [`Url::port`].
     /// * `backoff` - Backoff configuration for reconnection attempts.
     ///
     /// # Returns
@@ -122,8 +144,9 @@ impl Repo {
         &self,
         url: Url,
         backoff: crate::BackoffConfig,
-    ) -> Result<crate::DialerHandle, crate::Stopped> {
-        let dialer = Arc::new(TcpDialer::new(url));
+    ) -> Result<crate::DialerHandle, TcpDialerError> {
+        let dialer = Arc::new(TcpDialer::new(url)?);
         self.dial(backoff, dialer)
+            .map_err(|_| TcpDialerError::RepoStopped)
     }
 }
