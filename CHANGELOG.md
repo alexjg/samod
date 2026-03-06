@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.8.0 - 2024-03-06
 
 The main focus of this release is a new connection management API which
 replaces the `Repo::connect` method with separate APIs for making outgoing
