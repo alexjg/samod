@@ -32,7 +32,8 @@ use crate::{Dialer, Repo, Transport};
 ///     let repo: Repo = Repo::build_tokio().load().await;
 ///     let acceptor = repo.make_acceptor(url::Url::parse("tcp://someserver").unwrap()).unwrap();
 ///     let (io, _) = listener.accept().await.unwrap();
-///     acceptor.accept(Transport::from_tokio_io(io));
+///     let connection_handle = acceptor.accept(Transport::from_tokio_io(io)).unwrap();
+///     connection_handle.handshake_complete().await;
 /// });
 ///
 /// // Now make a client which dials the server

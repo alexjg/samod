@@ -3,6 +3,8 @@ use futures::TryStreamExt;
 use futures::{Sink, SinkExt, Stream, StreamExt};
 
 use crate::Repo;
+#[cfg(feature = "tungstenite")]
+use crate::connection::ConnectionHandle;
 
 #[cfg(feature = "tungstenite")]
 use std::pin::Pin;
@@ -241,7 +243,7 @@ impl crate::AcceptorHandle {
     ///
     /// * `socket` - A tungstenite WebSocket (both `Sink` and `Stream`).
     #[cfg(feature = "tungstenite")]
-    pub fn accept_tungstenite<S>(&self, socket: S) -> Result<(), crate::Stopped>
+    pub fn accept_tungstenite<S>(&self, socket: S) -> Result<ConnectionHandle, crate::Stopped>
     where
         S: Sink<tungstenite::Message, Error = tungstenite::Error>
             + Stream<Item = Result<tungstenite::Message, tungstenite::Error>>
@@ -264,7 +266,7 @@ impl crate::AcceptorHandle {
     ///
     /// * `socket` - An axum WebSocket (both `Sink` and `Stream`).
     #[cfg(feature = "axum")]
-    pub fn accept_axum(&self, socket: axum::extract::ws::WebSocket) -> Result<(), crate::Stopped> {
+    pub fn accept_axum(&self, socket: axum::extract::ws::WebSocket) -> Result<ConnectionHandle, crate::Stopped> {
         let ws = socket
             .map_err(|e| NetworkError(format!("error receiving websocket message: {}", e)))
             .sink_map_err(|e| NetworkError(format!("error sending websocket message: {}", e)));
