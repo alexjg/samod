@@ -1,6 +1,6 @@
 use std::sync::{Arc, Mutex};
 
-use crate::ConnectionId;
+use crate::{ConnectionId, connection::ConnectionHandle};
 use samod_core::ListenerId;
 
 use crate::{ConnFinishedReason, PeerInfo, Repo, Stopped, unbounded};
@@ -71,7 +71,7 @@ impl AcceptorHandle {
     /// Wires up the transport to the hub and starts driving the connection.
     /// This is typically called from a server framework's connection handler
     /// (e.g. an axum WebSocket upgrade handler).
-    pub fn accept(&self, transport: crate::Transport) -> Result<(), Stopped> {
+    pub fn accept(&self, transport: crate::Transport) -> Result<ConnectionHandle, Stopped> {
         self.repo.accept_on_listener(self.listener_id, transport)
     }
 
@@ -79,7 +79,7 @@ impl AcceptorHandle {
     /// [`TcpDialer`](crate::tokio_io::TcpDialer). See the documentation for
     /// that type for examples.
     #[cfg(feature = "tokio")]
-    pub fn accept_tokio_io<S>(&self, io: S) -> Result<(), Stopped>
+    pub fn accept_tokio_io<S>(&self, io: S) -> Result<ConnectionHandle, Stopped>
     where
         S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + Unpin + 'static,
     {
