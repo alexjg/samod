@@ -767,7 +767,7 @@ impl Repo {
         &self,
         listener_id: ListenerId,
         transport: crate::Transport,
-    ) -> Result<(), Stopped> {
+    ) -> Result<ConnectionHandle, Stopped> {
         let mut inner = self.inner.lock().unwrap();
 
         // Create the connection atomically associated with the listener
@@ -797,13 +797,13 @@ impl Repo {
             .clone();
 
         let loop_task = IoLoopTask::DriveConnection(DriveConnectionTask {
-            conn_handle,
+            conn_handle: conn_handle.clone(),
             stream: transport.stream,
             sink: transport.sink,
         });
         inner.tx_io.unbounded_send(loop_task).map_err(|_| Stopped)?;
 
-        Ok(())
+        Ok(conn_handle)
     }
 
     /// Stop the `Samod` instance.
@@ -981,8 +981,9 @@ impl Inner {
                             }
                             ConnectionOwner::Listener(listener_id) => {
                                 if let Some(ah) = self.acceptor_handles.get(&listener_id) {
-                                    ah.notify_client_connected(samod_peer_info, connection_id);
+                                    ah.notify_client_connected(samod_peer_info.clone(), connection_id);
                                 }
+                                conn_handle.notify_client_connected(samod_peer_info);
                             }
                         }
                     }
@@ -1015,6 +1016,9 @@ impl Inner {
                                     connection_id,
                                     ConnFinishedReason::ErrorReceiving(error.clone()),
                                 );
+                                if let Some(conn_handle) = self.connections.get(&connection_id) {
+                                    conn_handle.notify_client_disconnected(ConnFinishedReason::ErrorReceiving(error.clone()));
+                                };
                             }
                         }
                     }
