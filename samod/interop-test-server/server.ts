@@ -42,6 +42,11 @@ class Server {
       res.send(`👍 @automerge/automerge-repo-sync-server is running`);
     });
 
+    app.get("/storage-keys", (req, res) => {
+      const keys = this.#storage.keys();
+      res.json(keys);
+    });
+
     this.#server = app.listen(PORT, () => {
       console.log(`Listening on port ${this.#server.address().port}`);
     });
@@ -93,6 +98,10 @@ class InMemoryStorageAdapter implements StorageAdapterInterface {
       }
     }
     return Promise.resolve();
+  }
+
+  keys(): string[][] {
+    return Array.from(this.#data.keys());
   }
 
   log() {

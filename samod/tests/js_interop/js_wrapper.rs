@@ -4,6 +4,16 @@ use futures::{Stream, StreamExt};
 use samod::DocumentId;
 use tokio::{io::AsyncBufReadExt, process::Command, sync::OnceCell};
 
+impl RunningJsServer {
+    /// Query the JS server's storage keys via its /storage-keys HTTP endpoint.
+    pub(super) async fn storage_keys(&self) -> eyre::Result<Vec<Vec<String>>> {
+        let url = format!("http://localhost:{}/storage-keys", self.port);
+        let resp = reqwest::get(&url).await?;
+        let keys: Vec<Vec<String>> = resp.json().await?;
+        Ok(keys)
+    }
+}
+
 const INTEROP_SERVER_PATH: &str = "interop-test-server";
 
 static JS_DEPS_INITIALIZED: OnceCell<Result<(), String>> = OnceCell::const_new();

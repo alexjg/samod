@@ -140,9 +140,9 @@ impl WireMessage {
                 "count" | "timestamp" => {
                     fields.insert(key, FieldValue::Uint(decode_u64_or_f64(&mut decoder)?));
                 }
-                "metadata" => {
+                "peerMetadata" | "metadata" => {
                     let metadata = decode_metadata(&mut decoder)?;
-                    fields.insert(key, FieldValue::Metadata(metadata));
+                    fields.insert("peerMetadata".to_string(), FieldValue::Metadata(metadata));
                 }
                 "newHeads" => {
                     let new_heads = decode_new_heads(&mut decoder)?;
@@ -170,7 +170,7 @@ impl WireMessage {
                     ))?
                     .clone();
                 let metadata = fields
-                    .get("metadata")
+                    .get("peerMetadata")
                     .and_then(|v| v.as_metadata())
                     .cloned();
 
@@ -191,7 +191,7 @@ impl WireMessage {
                     ))?
                     .clone();
                 let metadata = fields
-                    .get("metadata")
+                    .get("peerMetadata")
                     .and_then(|v| v.as_metadata())
                     .cloned();
 
@@ -362,7 +362,7 @@ impl WireMessage {
                     encoder.str(version)?;
                 }
                 if let Some(metadata) = metadata {
-                    encoder.str("metadata")?;
+                    encoder.str("peerMetadata")?;
                     encode_metadata(&mut encoder, metadata)
                         .map_err(|e| EncodeError::Minicbor(format!("{e:?}")))?;
                 }
@@ -382,7 +382,7 @@ impl WireMessage {
                     .str(selected_protocol_version)?;
                 encoder.str("targetId")?.str(&target_id.to_string())?;
                 if let Some(metadata) = metadata {
-                    encoder.str("metadata")?;
+                    encoder.str("peerMetadata")?;
                     encode_metadata(&mut encoder, metadata)
                         .map_err(|e| EncodeError::Minicbor(format!("{e:?}")))?;
                 }
@@ -598,8 +598,13 @@ fn decode_metadata(decoder: &mut minicbor::Decoder) -> Result<PeerMetadata, Deco
     for _ in 0..len {
         match decoder.str()? {
             "storageId" => {
-                let storage_id_str = decoder.str()?;
-                storage_id = Some(StorageId::from(storage_id_str));
+                // cbor-x may encode undefined values (e.g. when JS peer has no storage)
+                if decoder.datatype()? == minicbor::data::Type::Undefined {
+                    decoder.undefined()?;
+                } else {
+                    let storage_id_str = decoder.str()?;
+                    storage_id = Some(StorageId::from(storage_id_str));
+                }
             }
             "isEphemeral" => {
                 is_ephemeral = decoder.bool()?;
