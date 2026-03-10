@@ -187,6 +187,49 @@ async fn js_client_sending_remote_heads_changed_does_not_break_rust_server() {
     assert_eq!(heads, fetched_heads);
 }
 
+/// Test that the JS server saves sync state for a non-ephemeral samod peer.
+///
+/// When samod connects with `isEphemeral: false` and a `storageId`, the JS
+/// automerge-repo should persist sync state keyed by that storage ID. If this
+/// doesn't happen, reconnecting peers will have to re-sync from scratch,
+/// resulting in unnecessarily large initial sync messages.
+#[tokio::test]
+async fn js_server_saves_sync_state_for_non_ephemeral_samod_peer() {
+    init_logging();
+    let js = JsWrapper::create().await.unwrap();
+    let js_server = js.start_server().await.unwrap();
+    let port = js_server.port;
+
+    let repo = samod_connected_to_js_server(port, Some("repo1".to_string())).await;
+
+    let doc_handle = repo.create(Automerge::new()).await.unwrap();
+    doc_handle
+        .with_document(|doc| {
+            doc.transact(|tx| {
+                tx.put(automerge::ROOT, "key", "value")?;
+                Ok::<_, automerge::AutomergeError>(())
+            })
+        })
+        .unwrap();
+
+    // Wait for sync to complete and sync state to be persisted
+    tokio::time::sleep(Duration::from_millis(2000)).await;
+
+    let keys = js_server.storage_keys().await.unwrap();
+    println!("JS server storage keys: {:?}", keys);
+
+    // The JS server should have saved sync state for the samod peer.
+    // Sync state keys have the form [documentId, "sync-state", storageId].
+    let has_sync_state = keys
+        .iter()
+        .any(|key| key.len() >= 2 && key[1] == "sync-state");
+    assert!(
+        has_sync_state,
+        "JS server should have saved sync state for the non-ephemeral samod peer, but storage keys were: {:?}",
+        keys
+    );
+}
+
 async fn samod_connected_to_js_server(port: u16, peer_id: Option<String>) -> Repo {
     let mut builder = Repo::build_tokio();
     if let Some(peer_id) = peer_id {
