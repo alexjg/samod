@@ -72,6 +72,10 @@ impl std::fmt::Debug for TcpDialerError {
 impl std::error::Error for TcpDialerError {}
 
 impl TcpDialer {
+    pub fn new_host_port(host: String, port: u16) -> Self {
+        Self { host, port }
+    }
+
     /// Create a dialer which will resolve the given [`Url`].
     /// The [`Url`] must have the scheme `tcp://`, and must have a valid [`Url::host`] and [`Url::port`].
     pub fn new(url: Url) -> Result<Self, TcpDialerError> {
