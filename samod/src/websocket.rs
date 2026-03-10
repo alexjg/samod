@@ -266,7 +266,10 @@ impl crate::AcceptorHandle {
     ///
     /// * `socket` - An axum WebSocket (both `Sink` and `Stream`).
     #[cfg(feature = "axum")]
-    pub fn accept_axum(&self, socket: axum::extract::ws::WebSocket) -> Result<ConnectionHandle, crate::Stopped> {
+    pub fn accept_axum(
+        &self,
+        socket: axum::extract::ws::WebSocket,
+    ) -> Result<ConnectionHandle, crate::Stopped> {
         let ws = socket
             .map_err(|e| NetworkError(format!("error receiving websocket message: {}", e)))
             .sink_map_err(|e| NetworkError(format!("error sending websocket message: {}", e)));
