@@ -981,7 +981,10 @@ impl Inner {
                             }
                             ConnectionOwner::Listener(listener_id) => {
                                 if let Some(ah) = self.acceptor_handles.get(&listener_id) {
-                                    ah.notify_client_connected(samod_peer_info.clone(), connection_id);
+                                    ah.notify_client_connected(
+                                        samod_peer_info.clone(),
+                                        connection_id,
+                                    );
                                 }
                                 conn_handle.notify_client_connected(samod_peer_info);
                             }
@@ -1017,7 +1020,9 @@ impl Inner {
                                     ConnFinishedReason::ErrorReceiving(error.clone()),
                                 );
                                 if let Some(conn_handle) = self.connections.get(&connection_id) {
-                                    conn_handle.notify_client_disconnected(ConnFinishedReason::ErrorReceiving(error.clone()));
+                                    conn_handle.notify_client_disconnected(
+                                        ConnFinishedReason::ErrorReceiving(error.clone()),
+                                    );
                                 };
                             }
                         }
