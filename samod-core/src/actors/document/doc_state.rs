@@ -6,16 +6,21 @@ use automerge::Automerge;
 use crate::{
     ConnectionId, DocumentId, StorageKey, UnixTimestamp,
     actors::{
-        document::{DocActorResult, SyncDirection, SyncMessageStat},
-        messages::{Broadcast, DocMessage, DocToHubMsgPayload, SyncMessage},
+        document::{
+            DocActorResult, SyncDirection, SyncMessageStat,
+            phase::{
+                loading::Loading,
+                ready::Ready,
+                request::{Request, RequestState},
+            },
+        },
+        messages::{Broadcast, DocMessage, SyncMessage},
     },
 };
 
 use super::{
     DocumentStatus,
     peer_doc_connection::{AnnouncePolicy, PeerDocConnection},
-    ready::Ready,
-    request::{Request, RequestState},
 };
 
 #[derive(Debug)]
@@ -32,9 +37,7 @@ pub(super) struct DocState {
 
 #[derive(Debug)]
 pub enum Phase {
-    Loading {
-        pending_sync_messages: HashMap<ConnectionId, Vec<SyncMessage>>,
-    },
+    Loading(Loading),
     Requesting(Request),
     Ready(Ready),
     NotFound,
@@ -56,9 +59,7 @@ impl DocState {
         any_dialer_connecting: bool,
     ) -> Self {
         Self {
-            phase: Phase::Loading {
-                pending_sync_messages: HashMap::new(),
-            },
+            phase: Phase::Loading(Loading::new()),
             document_id,
             doc,
             any_dialer_connecting,
@@ -79,43 +80,33 @@ impl DocState {
             PhaseTransition::None => {}
             PhaseTransition::ToReady => {
                 tracing::trace!("transitioning to ready");
-                out.send_message(DocToHubMsgPayload::DocumentStatusChanged {
-                    new_status: DocumentStatus::Ready,
-                });
+                out.send_doc_status_update(DocumentStatus::Ready);
                 out.emit_doc_changed(self.doc.get_heads());
                 self.phase = Phase::Ready(Ready::new());
             }
             PhaseTransition::ToNotFound => {
                 tracing::trace!("transitioning to NotFound");
-                out.send_message(DocToHubMsgPayload::DocumentStatusChanged {
-                    new_status: DocumentStatus::NotFound,
-                });
+                out.send_doc_status_update(DocumentStatus::NotFound);
                 if let Phase::Requesting(request) = &self.phase {
                     for peer in request.peers_waiting_for_us_to_respond() {
-                        out.send_message(DocToHubMsgPayload::SendSyncMessage {
-                            connection_id: peer,
-                            document_id: self.document_id.clone(),
-                            message: SyncMessage::DocUnavailable,
-                        });
+                        out.send_sync_message(
+                            peer,
+                            self.document_id.clone(),
+                            SyncMessage::DocUnavailable,
+                        );
                     }
                 }
                 self.phase = Phase::NotFound;
             }
             PhaseTransition::ToRequesting(request) => {
                 tracing::trace!("transitioning to requesting");
-                out.send_message(DocToHubMsgPayload::DocumentStatusChanged {
-                    new_status: DocumentStatus::Requesting,
-                });
+                out.send_doc_status_update(DocumentStatus::Requesting);
                 self.phase = Phase::Requesting(request);
             }
             PhaseTransition::ToLoading => {
                 tracing::trace!("transitioning to loading");
-                out.send_message(DocToHubMsgPayload::DocumentStatusChanged {
-                    new_status: DocumentStatus::Loading,
-                });
-                self.phase = Phase::Loading {
-                    pending_sync_messages: HashMap::new(),
-                };
+                out.send_doc_status_update(DocumentStatus::Loading);
+                self.phase = Phase::Loading(Loading::new());
             }
         }
     }
@@ -159,8 +150,9 @@ impl DocState {
         }
         // self.save_state
         //     .add_on_disk(snapshots.into_keys().chain(incrementals.into_keys()));
-        if matches!(self.phase, Phase::Loading { .. }) {
-            if self.doc.get_heads().is_empty() {
+        if let Phase::Loading(loading) = &mut self.phase {
+            let pending_sync_messages = loading.take_pending_sync_messages();
+            let phase_transition = if self.doc.get_heads().is_empty() {
                 let eligible_conns = peer_connections
                     .values()
                     .any(|p| p.announce_policy() != AnnouncePolicy::DontAnnounce);
@@ -170,47 +162,23 @@ impl DocState {
                         self.any_dialer_connecting,
                         "no data found on disk, requesting document"
                     );
-                    let mut next_phase = Phase::Requesting(Request::new(
+                    PhaseTransition::ToRequesting(Request::new(
                         self.document_id.clone(),
                         peer_connections.values(),
-                    ));
-                    std::mem::swap(&mut self.phase, &mut next_phase);
-                    let Phase::Loading {
-                        pending_sync_messages,
-                    } = next_phase
-                    else {
-                        unreachable!("we already checked");
-                    };
-                    for (conn_id, msgs) in pending_sync_messages {
-                        for msg in msgs {
-                            self.handle_sync_message(now, out, conn_id, peer_connections, msg, now);
-                        }
-                    }
-                    out.send_message(DocToHubMsgPayload::DocumentStatusChanged {
-                        new_status: DocumentStatus::Requesting,
-                    });
+                    ))
                 } else {
                     tracing::debug!(
                         "no data found on disk and no connections available, transitioning to NotFound"
                     );
-                    self.handle_phase_transition(out, PhaseTransition::ToNotFound);
+                    PhaseTransition::ToNotFound
                 }
-                return;
-            }
-
-            tracing::trace!("load complete, transitioning to ready");
-
-            let mut next_phase = Phase::Ready(Ready::new());
-            std::mem::swap(&mut self.phase, &mut next_phase);
-            let Phase::Loading {
-                pending_sync_messages,
-            } = next_phase
-            else {
-                unreachable!("we already checked");
+            } else {
+                tracing::trace!("load complete, transitioning to ready");
+                PhaseTransition::ToReady
             };
-            out.send_message(DocToHubMsgPayload::DocumentStatusChanged {
-                new_status: DocumentStatus::Ready,
-            });
+
+            self.handle_phase_transition(out, phase_transition);
+
             for (conn_id, msgs) in pending_sync_messages {
                 for msg in msgs {
                     self.handle_sync_message(now, out, conn_id, peer_connections, msg, now);
@@ -254,10 +222,7 @@ impl DocState {
                         }
                     })
                     .collect();
-                out.send_message(DocToHubMsgPayload::Broadcast {
-                    connections: targets,
-                    msg: Broadcast::Gossip { msg },
-                });
+                out.send_broadcast(targets, Broadcast::Gossip { msg });
             }
             DocMessage::Sync(msg) => self.handle_sync_message(
                 now,
@@ -298,13 +263,8 @@ impl DocState {
         };
 
         let (transition, duration) = match &mut self.phase {
-            Phase::Loading {
-                pending_sync_messages,
-            } => {
-                pending_sync_messages
-                    .entry(connection_id)
-                    .or_default()
-                    .push(msg);
+            Phase::Loading(loading) => {
+                loading.receive_sync_message(connection_id, msg);
                 (PhaseTransition::None, None)
             }
             Phase::Requesting(request) => {
@@ -380,11 +340,8 @@ impl DocState {
     ) -> HashMap<ConnectionId, Vec<SyncMessage>> {
         let mut result: HashMap<ConnectionId, Vec<SyncMessage>> = HashMap::new();
         for (conn_id, peer_conn) in peer_connections {
-            if let Phase::Loading {
-                pending_sync_messages,
-            } = &self.phase
-            {
-                out.pending_sync_messages = pending_sync_messages.values().map(|v| v.len()).sum();
+            if let Phase::Loading(loading) = &self.phase {
+                out.pending_sync_messages = loading.pending_msg_count();
                 continue;
             }
 
