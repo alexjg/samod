@@ -29,7 +29,7 @@ async fn sync_rust_clients_via_js_server() {
         .with_document(|doc| {
             doc.transact(|tx| {
                 tx.put(automerge::ROOT, "key", "value")?;
-                Ok::<_, automerge::AutomergeError>(())
+                Ok::<_, Box<automerge::AutomergeError>>(())
             })
         })
         .unwrap();
@@ -207,7 +207,7 @@ async fn js_server_saves_sync_state_for_non_ephemeral_samod_peer() {
         .with_document(|doc| {
             doc.transact(|tx| {
                 tx.put(automerge::ROOT, "key", "value")?;
-                Ok::<_, automerge::AutomergeError>(())
+                Ok::<_, Box<automerge::AutomergeError>>(())
             })
         })
         .unwrap();
