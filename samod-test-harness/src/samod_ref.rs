@@ -211,4 +211,12 @@ impl SamodRef<'_> {
     ) -> &[HashMap<ConnectionId, PeerDocState>] {
         self.wrapper_ref().peer_state_changes(doc_id)
     }
+
+    pub fn pause_storage(&mut self) {
+        self.wrapper().pause_storage();
+    }
+
+    pub fn resume_storage(&mut self) {
+        self.wrapper().resume_storage();
+    }
 }

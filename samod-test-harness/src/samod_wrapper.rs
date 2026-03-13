@@ -60,7 +60,10 @@ impl SamodWrapper {
             match loader.step(&mut rng, now) {
                 samod_core::LoaderState::NeedIo(tasks) => {
                     for task in tasks {
-                        let result = storage.handle_task(task.action);
+                        storage.handle_task(task.task_id, task.action);
+                        let result = storage
+                            .check_pending_task(task.task_id)
+                            .expect("storage should not be paused");
                         loader.provide_io_result(IoResult {
                             task_id: task.task_id,
                             payload: result,
@@ -83,6 +86,14 @@ impl SamodWrapper {
             announce_policy: Box::new(|_, _| true),
             test_listener_id: None,
         }
+    }
+
+    pub fn pause_storage(&mut self) {
+        self.storage.pause();
+    }
+
+    pub fn resume_storage(&mut self) {
+        self.storage.resume();
     }
 
     /// Register a new dialer in the hub (for connector tests).
@@ -237,7 +248,7 @@ impl SamodWrapper {
     pub fn start_find_document(&mut self, document_id: &DocumentId) -> CommandId {
         let DispatchedCommand { command_id, event } = HubEvent::find_document(document_id.clone());
         self.inbox.push_back(event);
-        self.handle_events();
+        // self.handle_events();
         command_id
     }
 
@@ -360,11 +371,7 @@ impl SamodWrapper {
     }
 
     pub fn storage(&self) -> &HashMap<StorageKey, Vec<u8>> {
-        &self.storage.0
-    }
-
-    pub fn storage_mut(&mut self) -> &mut HashMap<StorageKey, Vec<u8>> {
-        &mut self.storage.0
+        self.storage.data()
     }
 
     pub fn push_event(&mut self, event: HubEvent) {
