@@ -70,9 +70,7 @@ impl DocumentActor {
 
         let state = if let Some(doc) = initial_content {
             // Let the hub know this document is ready immediately if we already have content
-            out.send_message(DocToHubMsgPayload::DocumentStatusChanged {
-                new_status: DocumentStatus::Ready,
-            });
+            out.send_doc_status_update(DocumentStatus::Ready);
             DocState::new_ready(document_id.clone(), doc, any_dialer_pending)
         } else {
             DocState::new_loading(document_id.clone(), Automerge::new(), any_dialer_pending)
@@ -400,7 +398,7 @@ impl DocumentActor {
         if self.run_state == RunState::Stopping {
             if self.on_disk_state.is_flushed() {
                 self.run_state = RunState::Stopped;
-                out.send_message(DocToHubMsgPayload::Terminated);
+                out.send_terminated();
                 out.stopped = true;
             }
             return;
@@ -458,11 +456,7 @@ impl DocumentActor {
                 .generate_sync_messages(now, out, &mut self.peer_connections)
         {
             for msg in msgs {
-                out.send_message(DocToHubMsgPayload::SendSyncMessage {
-                    connection_id: conn_id,
-                    document_id: doc_id.clone(),
-                    message: msg,
-                });
+                out.send_sync_message(conn_id, doc_id.clone(), msg);
             }
         }
     }
@@ -475,7 +469,7 @@ impl DocumentActor {
             .collect::<HashMap<_, _>>();
         if !states.is_empty() {
             out.peer_state_changes = states.clone();
-            out.send_message(DocToHubMsgPayload::PeerStatesChanged { new_states: states })
+            out.send_peer_states_changes(states)
         }
     }
 

@@ -3,9 +3,13 @@ use std::time::Duration;
 
 use automerge::{Automerge, ChangeHash, ReadDoc, sync};
 
-use crate::{ConnectionId, DocumentId, UnixTimestamp, actors::messages::SyncMessage};
-
-use super::peer_doc_connection::{AnnouncePolicy, PeerDocConnection};
+use crate::{
+    ConnectionId, DocumentId, UnixTimestamp,
+    actors::{
+        document::peer_doc_connection::{AnnouncePolicy, PeerDocConnection},
+        messages::SyncMessage,
+    },
+};
 
 #[derive(Debug)]
 pub(crate) struct Request {

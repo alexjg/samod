@@ -2,14 +2,19 @@
 
 ## Unreleased
 
+### Fixed
+
+* A bug where locally unavailable documents sent by peers with an announce
+  policy set to false would be marked as unavailable
+
 ### Added
 
-- `TcpDialer::new` which takes a `Url` parameter, rather than a host and a port
+* `TcpDialer::new` which takes a `Url` parameter, rather than a host and a port
   or a socket address.
-- `Repo::dial_tcp()` to simplify construction of `TcpDialer`. 
-- Allow documents syncing over the TCP transport to be up to 8gb size instead
+* `Repo::dial_tcp()` to simplify construction of `TcpDialer`. 
+* Allow documents syncing over the TCP transport to be up to 8gb size instead
   of Tokio's default 8mb frame size
-- Exposed receiving `ConnectionHandle`s via `accept()`. Users can now subscribe
+* Exposed receiving `ConnectionHandle`s via `accept()`. Users can now subscribe
   to an `events()` stream directly on the handle, or `await` for
   `handshake_completed()`.
 

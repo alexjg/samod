@@ -652,3 +652,106 @@ fn three_chained_sync_servers() {
     assert_eq!(verification_result.0, "alice");
     assert_eq!(verification_result.1, "hello from alice");
 }
+
+#[test]
+fn dont_announce_policy_retains_documents_synced_by_clients() {
+    // This test is a reproduction of an issue described in
+    // https://github.com/alexjg/samod/pull/85
+    //
+    // The issue was that if we receive a sync message for a document we don't
+    // have from a peer who does have the document, but our announce policy is
+    // set to false, then we erroneously treat the document as unavailable. The
+    // reason for this is that we were dropping the sync message from the peer
+    // because of the announce policy, but the sync message contained the
+    // document.
+    init_logging();
+    let mut network = Network::new();
+
+    let server = network.create_samod("Server");
+    network
+        .samod(&server)
+        .set_announce_policy(Box::new(|_, _| false));
+
+    let client = network.create_samod("Client");
+
+    let RunningDocIds { doc_id, actor_id } = network.samod(&client).create_document();
+    network
+        .samod(&client)
+        .with_document_by_actor(actor_id, |doc| {
+            doc.transact::<_, _, AutomergeError>(|tx| {
+                tx.put(automerge::ROOT, "foo", "bar")?;
+                Ok(())
+            })
+            .unwrap()
+        })
+        .unwrap();
+
+    network.run_until_quiescent();
+
+    network.connect(client, server);
+    network.run_until_quiescent();
+
+    let server_actor = network.samod(&server).find_document(&doc_id);
+    assert!(server_actor.is_some(), "Server should have the document");
+
+    let server_actor = server_actor.unwrap();
+    let val = network
+        .samod(&server)
+        .with_document_by_actor(server_actor, |doc| {
+            doc.get(automerge::ROOT, "foo")
+                .unwrap()
+                .map(|(v, _)| v.to_string())
+        })
+        .unwrap();
+
+    assert_eq!(val.as_deref(), Some("\"bar\""));
+}
+
+#[test]
+fn find_doesnt_bounce_through_unavailable_when_receiving_doc() {
+    init_logging();
+    let mut network = Network::new();
+
+    let server = network.create_samod("Server");
+    network
+        .samod(&server)
+        .set_announce_policy(Box::new(|_, _| false));
+
+    let client = network.create_samod("Client");
+
+    network.connect(client, server);
+    network.run_until_quiescent();
+
+    // Peers are now connected, now create the document on the client whilst
+    // simultaenously finding it on the server
+
+    let RunningDocIds { doc_id, actor_id } = network.samod(&client).create_document();
+    network
+        .samod(&client)
+        .with_document_by_actor(actor_id, |doc| {
+            doc.transact::<_, _, AutomergeError>(|tx| {
+                tx.put(automerge::ROOT, "foo", "bar")?;
+                Ok(())
+            })
+            .unwrap()
+        })
+        .unwrap();
+    let find_command = network.samod(&server).begin_find_document(&doc_id);
+
+    network.samod(&server).pause_storage();
+    assert!(
+        network
+            .samod(&server)
+            .check_find_document_result(find_command)
+            .is_none()
+    );
+    network.run_until_quiescent();
+    network.samod(&server).resume_storage();
+    network.run_until_quiescent();
+
+    network
+        .samod(&server)
+        .check_find_document_result(find_command)
+        .expect("find command should have completed")
+        .expect("document should be found on server");
+}
