@@ -1,4 +1,4 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use automerge::Automerge;
 use samod_core::{
@@ -10,7 +10,7 @@ use samod_core::{
             io::{DocumentIoResult, DocumentIoTask},
         },
     },
-    io::{IoResult, IoTask},
+    io::{IoResult, IoTask, IoTaskId},
     network::PeerDocState,
 };
 
@@ -26,6 +26,7 @@ pub(crate) struct DocActorRunner {
     ephemera: Vec<Vec<u8>>,
     doc_changed: Vec<DocumentChanged>,
     peer_doc_state_changes: Vec<HashMap<ConnectionId, PeerDocState>>,
+    pending_storage_tasks: HashSet<IoTaskId>,
 }
 
 impl DocActorRunner {
@@ -42,6 +43,7 @@ impl DocActorRunner {
             ephemera: Vec::new(),
             doc_changed: Vec::new(),
             peer_doc_state_changes: Vec::new(),
+            pending_storage_tasks: HashSet::new(),
         };
         runner.enqueue_events(results);
         runner
@@ -53,6 +55,7 @@ impl DocActorRunner {
         storage: &mut Storage,
         announce_policy: &dyn Fn(DocumentId, PeerId) -> bool,
     ) {
+        self.handle_completed_storage(now, storage);
         while let Some(event) = self.inbox.pop_front() {
             if self.actor.is_stopped() {
                 self.inbox.clear();
@@ -66,27 +69,50 @@ impl DocActorRunner {
                         .expect("failed to handle actor message");
                     self.enqueue_events(result);
                 }
-                ActorEvent::Io(task) => {
-                    let io_result = match task.action {
-                        DocumentIoTask::Storage(storage_task) => IoResult {
-                            task_id: task.task_id,
-                            payload: DocumentIoResult::Storage(storage.handle_task(storage_task)),
-                        },
-                        DocumentIoTask::CheckAnnouncePolicy { peer_id } => IoResult {
+                ActorEvent::Io(task) => match task.action {
+                    DocumentIoTask::Storage(storage_task) => {
+                        storage.handle_task(task.task_id, storage_task);
+                        self.pending_storage_tasks.insert(task.task_id);
+                    }
+                    DocumentIoTask::CheckAnnouncePolicy { peer_id } => {
+                        let io_result = IoResult {
                             task_id: task.task_id,
                             payload: DocumentIoResult::CheckAnnouncePolicy(announce_policy(
                                 self.doc_id.clone(),
                                 peer_id,
                             )),
-                        },
-                    };
-                    let actor_result = self
-                        .actor
-                        .handle_io_complete(now, io_result)
-                        .expect("failed to handle IO completion");
-                    self.enqueue_events(actor_result);
-                }
+                        };
+                        let actor_result = self
+                            .actor
+                            .handle_io_complete(now, io_result)
+                            .expect("failed to handle IO completion");
+                        self.enqueue_events(actor_result);
+                    }
+                },
             }
+            self.handle_completed_storage(now, storage);
+        }
+    }
+
+    fn handle_completed_storage(&mut self, now: UnixTimestamp, storage: &mut Storage) {
+        let mut completed = Vec::new();
+        self.pending_storage_tasks.retain(|task_id| {
+            let Some(completed_task) = storage.check_pending_task(*task_id) else {
+                return true;
+            };
+            completed.push((*task_id, completed_task));
+            false
+        });
+        for (task_id, completed_task) in completed {
+            let io_result = IoResult {
+                task_id,
+                payload: DocumentIoResult::Storage(completed_task),
+            };
+            let actor_result = self
+                .actor
+                .handle_io_complete(now, io_result)
+                .expect("failed to handle IO completion");
+            self.enqueue_events(actor_result);
         }
     }
 
