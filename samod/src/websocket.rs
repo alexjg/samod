@@ -214,6 +214,9 @@ impl Repo {
     /// # Arguments
     ///
     /// * `url` - The WebSocket URL to connect to (e.g. `"wss://sync.example.com"`).
+    ///   For `wss://` URLs, enable one TLS backend feature:
+    ///   `tungstenite-native-tls`, `tungstenite-rustls-native-roots`,
+    ///   or `tungstenite-rustls-webpki-roots`.
     /// * `backoff` - Backoff configuration for reconnection attempts.
     ///
     /// # Returns

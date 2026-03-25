@@ -10,7 +10,12 @@ repository = "https://github.com/alexjg/samod"
 [features]
 tokio = ["dep:tokio", "dep:tokio-util"]
 axum = ["dep:axum", "dep:tokio", "dep:tokio-util"]
-tungstenite = ["dep:tungstenite", "dep:tokio-tungstenite", "tokio", "tungstenite/native-tls", "tokio-tungstenite/native-tls"]
+tungstenite = ["dep:tungstenite", "dep:tokio-tungstenite", "tokio"]
+# TLS backend selection for tungstenite-based dialing (`wss://`).
+# Pick one explicitly in downstream crates.
+tungstenite-native-tls = ["tungstenite", "tokio-tungstenite/native-tls"]
+tungstenite-rustls-native-roots = ["tungstenite", "tokio-tungstenite/rustls-tls-native-roots"]
+tungstenite-rustls-webpki-roots = ["tungstenite", "tokio-tungstenite/rustls-tls-webpki-roots"]
 gio = ["dep:gio", "dep:glib"]
 threadpool = ["dep:rayon"]
 

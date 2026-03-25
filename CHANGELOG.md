@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### Breaking Changes
+
+* Split websocket TLS backend selection into explicit feature flags:
+  `tungstenite-native-tls`, `tungstenite-rustls-native-roots`, and
+  `tungstenite-rustls-webpki-roots`. The base `tungstenite` feature no longer
+  forces `native-tls`.
+
 ## 0.9.0 - 2026-03-25
 
 ### Breaking Changes
