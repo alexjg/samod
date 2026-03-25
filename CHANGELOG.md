@@ -1,8 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.9.0 - 2026-03-25
 
-### Changed
+### Breaking Changes
 
 * Updated to `automerge@0.8.0`
 
@@ -22,7 +22,7 @@
   to an `events()` stream directly on the handle, or `await` for
   `handshake_completed()`.
 
-## 0.8.0 - 2024-03-06
+## 0.8.0 - 2026-03-06
 
 The main focus of this release is a new connection management API which
 replaces the `Repo::connect` method with separate APIs for making outgoing
