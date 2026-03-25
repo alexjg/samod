@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Changed
+
+* Updated to `automerge@0.8.0`
+
 ### Fixed
 
 * A bug where locally unavailable documents sent by peers with an announce
