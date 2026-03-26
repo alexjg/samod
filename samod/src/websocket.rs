@@ -3,7 +3,7 @@ use futures::TryStreamExt;
 use futures::{Sink, SinkExt, Stream, StreamExt};
 
 use crate::Repo;
-#[cfg(feature = "tungstenite")]
+#[cfg(any(feature = "tungstenite", feature = "axum"))]
 use crate::connection::ConnectionHandle;
 
 #[cfg(feature = "tungstenite")]
