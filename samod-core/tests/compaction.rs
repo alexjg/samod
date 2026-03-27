@@ -40,7 +40,16 @@ fn many_changes_are_compacted() {
         .unwrap();
 
     // Now, there should be less than 100 changes in storage due to compaction
-    let num_changes = network.samod(&alice).storage().len();
+    let is_doc_key = |key: &&StorageKey| -> bool {
+        StorageKey::incremental_prefix(&doc_id).is_prefix_of(key)
+            || StorageKey::snapshot_prefix(&doc_id).is_prefix_of(key)
+    };
+    let num_changes = network
+        .samod(&alice)
+        .storage()
+        .keys()
+        .filter(is_doc_key)
+        .count();
     assert!(
         num_changes < 100,
         "Expected less than 100 changes, found {num_changes}"

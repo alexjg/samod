@@ -21,6 +21,33 @@ impl DocumentId {
     pub fn as_bytes(&self) -> &[u8] {
         self.0.as_bytes()
     }
+
+    /// Convert to a `SedimentreeId` by zero-padding the 16-byte UUID to 32 bytes.
+    ///
+    /// This is a deterministic, invertible mapping used internally to bridge
+    /// between automerge document IDs and subduction sedimentree IDs.
+    #[cfg(feature = "subduction")]
+    pub fn to_sedimentree_id(&self) -> sedimentree_core::id::SedimentreeId {
+        let mut bytes = [0u8; 32];
+        bytes[..16].copy_from_slice(self.0.as_bytes());
+        sedimentree_core::id::SedimentreeId::new(bytes)
+    }
+
+    /// Create a `DocumentId` from a `SedimentreeId`, reversing the zero-padding.
+    ///
+    /// Returns `None` if the trailing 16 bytes are not all zeros (i.e. this
+    /// SedimentreeId wasn't derived from a DocumentId).
+    #[cfg(feature = "subduction")]
+    pub fn from_sedimentree_id(
+        sed_id: &sedimentree_core::id::SedimentreeId,
+    ) -> Option<Self> {
+        let bytes = sed_id.as_bytes();
+        if bytes[16..] != [0u8; 16] {
+            return None;
+        }
+        let uuid = Uuid::from_bytes(bytes[..16].try_into().unwrap());
+        Some(Self(uuid))
+    }
 }
 
 impl std::fmt::Debug for DocumentId {

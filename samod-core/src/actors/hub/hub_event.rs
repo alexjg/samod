@@ -195,6 +195,9 @@ impl HubEvent {
             HubEventPayload::IoComplete(io_completion) => match &io_completion.payload {
                 HubIoResult::Send => "io_complete_send",
                 HubIoResult::Disconnect => "io_complete_disconnect",
+                HubIoResult::Storage(_) => "io_complete_storage",
+                #[cfg(feature = "subduction")]
+                HubIoResult::Sign { .. } => "io_complete_sign",
             },
             HubEventPayload::Input(input) => match input {
                 HubInput::Stop => "stop",

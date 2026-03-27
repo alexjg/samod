@@ -63,4 +63,34 @@ pub(crate) enum HubToDocMsgPayload {
     DialerStatesChanged {
         dialers: HashMap<DialerId, DocDialerState>,
     },
+
+    /// New data arrived via subduction — apply these blobs to the automerge doc.
+    ///
+    /// Blobs are raw automerge change bytes in dependency order, ready for
+    /// `load_incremental()`.
+    #[cfg(feature = "subduction")]
+    ApplySubductionData {
+        blobs: Vec<Vec<u8>>,
+    },
+
+    /// Update on subduction's attempt to find this document.
+    #[cfg(feature = "subduction")]
+    SubductionRequestStatus {
+        status: SubductionSearchStatus,
+    },
+}
+
+/// Status of subduction's search for a document.
+#[cfg(feature = "subduction")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SubductionSearchStatus {
+    /// Subduction is still looking (checking storage, waiting for peers,
+    /// waiting for pending connections).
+    Searching,
+    /// Subduction found the document — blobs have been or will be sent
+    /// via `ApplySubductionData`.
+    Found,
+    /// Subduction has exhausted all options (no sedimentree in storage,
+    /// all subduction peers responded NotFound, no pending subduction connections).
+    NotFound,
 }

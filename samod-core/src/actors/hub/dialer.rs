@@ -5,7 +5,7 @@ use url::Url;
 use crate::{
     ConnectionId, DialerId, UnixTimestamp,
     actors::{hub::connection::Connection, messages::DocDialerState},
-    network::BackoffConfig,
+    network::{BackoffConfig, ConnectionProtocol},
 };
 
 /// Internal state for a dialer tracked by the hub.
@@ -19,6 +19,7 @@ pub(crate) struct DialerState {
     pub(crate) dialer_id: DialerId,
     pub(crate) url: Url,
     pub(crate) backoff_config: BackoffConfig,
+    pub(crate) protocol: ConnectionProtocol,
     pub(crate) status: DialerStatus,
     pub(crate) attempts: u32,
 }
@@ -39,11 +40,17 @@ pub(crate) enum DialerStatus {
 }
 
 impl DialerState {
-    pub(crate) fn new(dialer_id: DialerId, url: Url, backoff: BackoffConfig) -> Self {
+    pub(crate) fn new(
+        dialer_id: DialerId,
+        url: Url,
+        backoff: BackoffConfig,
+        protocol: ConnectionProtocol,
+    ) -> Self {
         Self {
             dialer_id,
             url,
             backoff_config: backoff,
+            protocol,
             status: DialerStatus::NeedTransport,
             attempts: 0,
         }

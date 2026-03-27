@@ -7,7 +7,7 @@ pub use listener_id::ListenerId;
 mod connection_owner;
 pub use connection_owner::ConnectionOwner;
 mod connector_config;
-pub use connector_config::{BackoffConfig, DialerConfig, ListenerConfig};
+pub use connector_config::{BackoffConfig, ConnectionProtocol, DialerConfig, ListenerConfig};
 mod dialer_event;
 pub use dialer_event::DialerEvent;
 mod transport_request;

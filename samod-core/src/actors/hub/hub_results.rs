@@ -1,11 +1,11 @@
 use std::collections::HashMap;
 
 use crate::{
-    DocumentActorId,
+    ConnectionId, DocumentActorId,
     actors::{
         HubToDocMsg,
         document::SpawnArgs,
-        hub::{CommandId, CommandResult, connection::Connection},
+        hub::{CommandId, CommandResult},
         messages::HubToDocMsgPayload,
     },
     io::{IoTask, IoTaskId},
@@ -62,10 +62,9 @@ pub struct HubResults {
 }
 
 impl HubResults {
-    pub(crate) fn send(&mut self, conn: &Connection, msg: Vec<u8>) {
-        tracing::trace!(conn_id=?conn.id(), remote_peer_id=?conn.remote_peer_id(), num_bytes=msg.len(), "sending message");
+    pub(crate) fn send(&mut self, conn_id: ConnectionId, msg: Vec<u8>) {
         self.emit_io_action(HubIoAction::Send {
-            connection_id: conn.id(),
+            connection_id: conn_id,
             msg,
         });
     }
@@ -98,10 +97,7 @@ impl HubResults {
 
     pub(crate) fn emit_io_action(&mut self, action: HubIoAction) -> IoTaskId {
         let task_id = IoTaskId::new();
-        self.new_tasks.push(IoTask {
-            task_id: IoTaskId::new(),
-            action,
-        });
+        self.new_tasks.push(IoTask { task_id, action });
         task_id
     }
 

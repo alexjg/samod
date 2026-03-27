@@ -670,7 +670,11 @@ impl Repo {
         let mut inner = self.inner.lock().unwrap();
 
         let url = dialer.url();
-        let config = DialerConfig { url, backoff };
+        let config = DialerConfig {
+            url,
+            backoff,
+            protocol: Default::default(),
+        };
 
         let DispatchedCommand { command_id, event } = HubEvent::add_dialer(config);
         let (tx_result, mut rx_result) = oneshot::channel();
@@ -713,7 +717,10 @@ impl Repo {
             return Ok(handle.clone());
         }
 
-        let config = ListenerConfig { url };
+        let config = ListenerConfig {
+            url,
+            protocol: Default::default(),
+        };
 
         let DispatchedCommand { command_id, event } = HubEvent::add_listener(config);
         let (tx_result, mut rx_result) = oneshot::channel();
@@ -899,6 +906,7 @@ impl Inner {
             event_type,
             connections_count,
             documents_count,
+            ..
         } = self.hub.handle_event(&mut self.rng, now, event);
 
         for spawn_args in spawn_actors {
@@ -940,6 +948,11 @@ impl Inner {
                             connection_id
                         );
                     }
+                }
+                HubIoAction::Storage(_storage_task) => {
+                    // TODO: execute storage task against the storage backend
+                    // and feed result back via HubEvent::io_complete
+                    tracing::warn!("Hub storage IO not yet implemented in samod runtime");
                 }
             }
         }

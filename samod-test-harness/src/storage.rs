@@ -72,6 +72,35 @@ impl Storage {
         }
     }
 
+    /// Execute a storage task and return the result immediately.
+    ///
+    /// Used for Hub-level storage (e.g. sedimentree data) where the result
+    /// is consumed synchronously in `execute_io_tasks`.
+    pub(crate) fn execute_task(&mut self, task: &StorageTask) -> StorageResult {
+        match task {
+            StorageTask::Load { key } => StorageResult::Load {
+                value: self.data.get(key).cloned(),
+            },
+            StorageTask::LoadRange { prefix } => {
+                let values = self
+                    .data
+                    .iter()
+                    .filter(|(k, _)| prefix.is_prefix_of(k))
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect();
+                StorageResult::LoadRange { values }
+            }
+            StorageTask::Put { key, value } => {
+                self.data.insert(key.clone(), value.clone());
+                StorageResult::Put
+            }
+            StorageTask::Delete { key } => {
+                self.data.remove(key);
+                StorageResult::Delete
+            }
+        }
+    }
+
     fn perform_task(&mut self, task_id: IoTaskId, task: StorageTask) {
         let result = match task {
             StorageTask::Load { key } => StorageResult::Load {

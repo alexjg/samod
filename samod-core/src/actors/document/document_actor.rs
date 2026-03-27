@@ -387,6 +387,16 @@ impl DocumentActor {
                 self.doc_state
                     .set_any_dialer_connecting(out, self.any_dialer_connecting());
             }
+            #[cfg(feature = "subduction")]
+            ActorInput::ApplySubductionData { blobs } => {
+                self.doc_state.apply_external_data(&blobs, out);
+            }
+            #[cfg(feature = "subduction")]
+            ActorInput::SubductionRequestStatus { status } => {
+                use crate::actors::messages::SubductionSearchStatus;
+                let searching = matches!(status, SubductionSearchStatus::Searching);
+                self.doc_state.set_subduction_searching(out, searching);
+            }
         }
         self.step(now, out);
     }

@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use url::Url;
 
-use crate::{ConnectionId, ListenerId};
+use crate::{ConnectionId, ListenerId, network::ConnectionProtocol};
 
 /// Internal state for a listener tracked by the hub.
 ///
@@ -13,15 +13,17 @@ pub(crate) struct ListenerState {
     #[expect(dead_code)]
     pub(crate) listener_id: ListenerId,
     pub(crate) url: Url,
+    pub(crate) protocol: ConnectionProtocol,
     /// All currently active connections on this endpoint.
     pub(crate) active_connections: HashSet<ConnectionId>,
 }
 
 impl ListenerState {
-    pub(crate) fn new(listener_id: ListenerId, url: Url) -> Self {
+    pub(crate) fn new(listener_id: ListenerId, url: Url, protocol: ConnectionProtocol) -> Self {
         Self {
             listener_id,
             url,
+            protocol,
             active_connections: HashSet::new(),
         }
     }

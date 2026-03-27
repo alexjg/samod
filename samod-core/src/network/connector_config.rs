@@ -2,6 +2,29 @@ use std::time::Duration;
 
 use url::Url;
 
+/// Which sync protocol a connection uses.
+///
+/// Each connection speaks exactly one protocol — there is no multiplexing
+/// or negotiation on the wire. The protocol is fixed at dialer/listener
+/// configuration time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ConnectionProtocol {
+    /// The existing automerge-repo wire protocol (CBOR, Join/Peer handshake).
+    AutomergeSync,
+    /// The subduction protocol (binary codec, Ed25519 handshake).
+    #[cfg(feature = "subduction")]
+    Subduction {
+        /// The expected audience for the handshake.
+        audience: subduction_sans_io::types::Audience,
+    },
+}
+
+impl Default for ConnectionProtocol {
+    fn default() -> Self {
+        Self::AutomergeSync
+    }
+}
+
 /// Configuration for a new dialer.
 ///
 /// A dialer actively establishes outgoing connections and automatically
@@ -12,6 +35,9 @@ pub struct DialerConfig {
     pub url: Url,
     /// Backoff configuration for reconnection attempts.
     pub backoff: BackoffConfig,
+    /// Which protocol this dialer's connections use.
+    /// Defaults to `AutomergeSync` if not specified.
+    pub protocol: ConnectionProtocol,
 }
 
 /// Configuration for a new listener.
@@ -23,6 +49,9 @@ pub struct ListenerConfig {
     /// URL identifying this listener endpoint (e.g. "ws://0.0.0.0:8080").
     /// Used for logging and identifying the endpoint in debugging output.
     pub url: Url,
+    /// Which protocol this listener's connections use.
+    /// Defaults to `AutomergeSync` if not specified.
+    pub protocol: ConnectionProtocol,
 }
 
 /// Configuration for exponential backoff with jitter.

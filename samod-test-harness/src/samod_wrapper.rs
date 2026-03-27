@@ -41,6 +41,9 @@ pub struct SamodWrapper {
     announce_policy: Box<dyn Fn(DocumentId, PeerId) -> bool>,
     /// A test listener ID used for incoming connections.
     test_listener_id: Option<ListenerId>,
+    /// Ed25519 signing key for subduction handshakes (when subduction is enabled).
+    #[cfg(feature = "subduction")]
+    signing_key: Option<ed25519_dalek::SigningKey>,
 }
 
 impl SamodWrapper {
@@ -50,7 +53,22 @@ impl SamodWrapper {
 
     pub fn new_with_storage(nickname: String, mut storage: Storage) -> Self {
         let peer_id = PeerId::from_string(nickname.clone());
-        let mut loader = samod_core::SamodLoader::new(peer_id);
+
+        #[cfg(feature = "subduction")]
+        let signing_key = {
+            let key_bytes: [u8; 32] = blake3::hash(nickname.as_bytes()).into();
+            ed25519_dalek::SigningKey::from_bytes(&key_bytes)
+        };
+
+        let mut loader = samod_core::SamodLoader::new(
+            peer_id,
+            #[cfg(feature = "subduction")]
+            samod_core::actors::hub::subduction_sync::SubductionConfig {
+                our_verifying_key: signing_key.verifying_key(),
+                responder_config: None,
+            },
+        );
+        #[allow(unused)]
         let now = UnixTimestamp::now();
 
         let mut rng = rand::rngs::StdRng::from_os_rng();
@@ -85,6 +103,8 @@ impl SamodWrapper {
             connection_events: Vec::new(),
             announce_policy: Box::new(|_, _| true),
             test_listener_id: None,
+            #[cfg(feature = "subduction")]
+            signing_key: Some(signing_key),
         }
     }
 
@@ -139,8 +159,62 @@ impl SamodWrapper {
                 max_delay: Duration::from_secs(999),
                 max_retries: None,
             },
+            protocol: Default::default(),
         });
         self.create_dialer_connection(dialer_id)
+    }
+
+    /// Create an outgoing subduction connection.
+    #[cfg(feature = "subduction")]
+    pub fn create_subduction_connection(&mut self) -> samod_core::ConnectionId {
+        use samod_core::network::ConnectionProtocol;
+        use subduction_sans_io::types::{Audience, DiscoveryId};
+
+        let rand_id = rand::random::<u64>();
+        let url = url::Url::parse(&format!("test://subduction/{}", rand_id)).unwrap();
+
+        let dialer_id = self.add_dialer(DialerConfig {
+            url,
+            backoff: samod_core::BackoffConfig {
+                initial_delay: Duration::from_secs(999),
+                max_delay: Duration::from_secs(999),
+                max_retries: None,
+            },
+            protocol: ConnectionProtocol::Subduction {
+                audience: Audience::Discover(DiscoveryId::from_raw([0; 32])),
+            },
+        });
+        self.create_dialer_connection(dialer_id)
+    }
+
+    /// Create an incoming subduction connection via a listener.
+    #[cfg(feature = "subduction")]
+    pub fn create_incoming_subduction_connection(&mut self) -> samod_core::ConnectionId {
+        use samod_core::network::{ConnectionProtocol, ListenerConfig};
+        use subduction_sans_io::types::{Audience, DiscoveryId};
+
+        let rand_id = rand::random::<u64>();
+        let url = url::Url::parse(&format!("test://subduction-listener/{}", rand_id)).unwrap();
+
+        let listener_id = self.add_listener(ListenerConfig {
+            url,
+            protocol: ConnectionProtocol::Subduction {
+                audience: Audience::Discover(DiscoveryId::from_raw([0; 32])),
+            },
+        });
+
+        let DispatchedCommand { command_id, event } =
+            HubEvent::create_listener_connection(listener_id);
+        self.inbox.push_back(event);
+        self.handle_events();
+        let completed_command = self
+            .completed_commands
+            .remove(&command_id)
+            .expect("create_listener_connection never completed");
+        match completed_command {
+            CommandResult::CreateConnection { connection_id, .. } => connection_id,
+            _ => panic!("Expected CreateConnection, got {completed_command:?}"),
+        }
     }
 
     /// Create a connection for a specific dialer.
@@ -168,7 +242,10 @@ impl SamodWrapper {
 
         // Ensure we have a test listener
         if self.test_listener_id.is_none() {
-            self.test_listener_id = Some(self.add_listener(ListenerConfig { url }));
+            self.test_listener_id = Some(self.add_listener(ListenerConfig {
+                url,
+                protocol: Default::default(),
+            }));
         }
         let listener_id = self.test_listener_id.unwrap();
         self.create_listener_connection(listener_id)
@@ -356,6 +433,20 @@ impl SamodWrapper {
                 HubIoAction::Disconnect { connection_id: _ } => {
                     // TODO: actually implement disconnection
                     HubIoResult::Disconnect
+                }
+                HubIoAction::Storage(storage_task) => {
+                    let storage_result = self.storage.execute_task(&storage_task);
+                    HubIoResult::Storage(storage_result)
+                }
+                #[cfg(feature = "subduction")]
+                HubIoAction::Sign { payload_bytes } => {
+                    let signing_key = self
+                        .signing_key
+                        .as_ref()
+                        .expect("subduction sign task but no signing key configured");
+                    use ed25519_dalek::Signer;
+                    let signature = signing_key.sign(&payload_bytes);
+                    HubIoResult::Sign { signature }
                 }
             };
             let task_result = IoResult {

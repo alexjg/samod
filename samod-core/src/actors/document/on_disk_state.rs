@@ -52,6 +52,17 @@ impl OnDiskState {
     ) {
         let new_changes = doc.get_changes(self.last_saved_heads.as_ref().unwrap_or(&Vec::new()));
 
+        // Collect structured change info for subduction before the save logic consumes new_changes.
+        #[cfg(feature = "subduction")]
+        let subduction_changes: Vec<crate::actors::messages::SubductionChangeInfo> = new_changes
+            .iter()
+            .map(|c| crate::actors::messages::SubductionChangeInfo {
+                hash: c.hash(),
+                deps: c.deps().to_vec(),
+                raw_bytes: c.raw_bytes().to_vec(),
+            })
+            .collect();
+
         let eligible_for_compaction = new_changes.len() > 10 || self.on_disk.len() > 10;
         if self.compaction.is_none() && eligible_for_compaction {
             tracing::debug!(
@@ -84,6 +95,17 @@ impl OnDiskState {
         for deletion in self.deletions.drain() {
             let delete_id = out.delete(deletion.clone());
             self.running_deletes.insert(delete_id, deletion);
+        }
+
+        // Notify the Hub of new changes for subduction propagation.
+        #[cfg(feature = "subduction")]
+        if !subduction_changes.is_empty() {
+            out.outgoing_messages.push(crate::actors::messages::DocToHubMsg(
+                crate::actors::messages::DocToHubMsgPayload::NewChangesForSubduction {
+                    document_id: doc_id.clone(),
+                    changes: subduction_changes,
+                },
+            ));
         }
 
         self.last_saved_heads = Some(doc.get_heads());

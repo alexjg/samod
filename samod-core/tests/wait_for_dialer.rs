@@ -28,6 +28,7 @@ fn non_retrying_dialer(url: &str) -> DialerConfig {
             max_delay: Duration::from_secs(999),
             max_retries: Some(0),
         },
+        protocol: Default::default(),
     }
 }
 
@@ -229,6 +230,7 @@ fn waiting_to_retry_does_not_block_not_found() {
             max_delay: Duration::from_secs(999),
             max_retries: None, // will retry indefinitely
         },
+        protocol: Default::default(),
     });
 
     // Start finding a document — pending because dialer is connecting

@@ -9,7 +9,7 @@ mod doc_actor_runner;
 mod running_doc_ids;
 pub use running_doc_ids::RunningDocIds;
 mod samod_id;
-use samod_id::SamodId;
+pub use samod_id::SamodId;
 mod samod_ref;
 mod samod_wrapper;
 pub use samod_ref::SamodRef;
@@ -67,6 +67,33 @@ impl Network {
         self.samods.insert(id, samod);
         self.run_until_quiescent();
         id
+    }
+
+    /// Connect two subduction-enabled peers.
+    #[cfg(feature = "subduction")]
+    pub fn connect_subduction(&mut self, left: SamodId, right: SamodId) -> Connected {
+        let left_connection = self
+            .samods
+            .get_mut(&left)
+            .expect("Left Samod not found")
+            .create_subduction_connection();
+        let right_connection = self
+            .samods
+            .get_mut(&right)
+            .expect("Right Samod not found")
+            .create_incoming_subduction_connection();
+
+        self.connections.push(Connection {
+            left_connection,
+            left_samod: left,
+            right_connection,
+            right_samod: right,
+        });
+
+        Connected {
+            left: left_connection,
+            right: right_connection,
+        }
     }
 
     pub fn connect(&mut self, left: SamodId, right: SamodId) -> Connected {
@@ -176,27 +203,34 @@ impl Network {
             for samod in self.samods.values_mut() {
                 samod.handle_events();
 
-                for (connection_id, msgs) in samod.outbox.drain() {
-                    if let Some(connection) = self.connections.iter().find(|c| {
-                        c.left_connection == connection_id || c.right_connection == connection_id
-                    }) {
-                        let (target_samod_id, target_connection_id) =
-                            if connection.left_connection == connection_id {
-                                (connection.right_samod, connection.right_connection)
-                            } else {
-                                (connection.left_samod, connection.left_connection)
-                            };
+                // Drain all messages from the outbox which have an existing connection
+                samod.outbox.retain(|connection_id, msgs| {
+                    let Some(connection) = self.connections.iter().find(|c| {
+                        c.left_connection == *connection_id || c.right_connection == *connection_id
+                    }) else {
+                        tracing::warn!(
+                            "message in outbox for non-existent connection: {:?}",
+                            connection_id
+                        );
+                        return true;
+                    };
+                    let (target_samod_id, target_connection_id) =
+                        if connection.left_connection == *connection_id {
+                            (connection.right_samod, connection.right_connection)
+                        } else {
+                            (connection.left_samod, connection.left_connection)
+                        };
 
-                        for msg in msgs {
-                            let DispatchedCommand { event, .. } =
-                                HubEvent::receive(target_connection_id, msg);
-                            msgs_this_round
-                                .entry(target_samod_id)
-                                .or_default()
-                                .push_back(event);
-                        }
+                    for msg in msgs.drain(..) {
+                        let DispatchedCommand { event, .. } =
+                            HubEvent::receive(target_connection_id, msg);
+                        msgs_this_round
+                            .entry(target_samod_id)
+                            .or_default()
+                            .push_back(event);
                     }
-                }
+                    false
+                });
             }
             let quiet = msgs_this_round.values().all(|m| m.is_empty());
             if quiet {

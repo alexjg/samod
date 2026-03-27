@@ -33,6 +33,10 @@ pub(super) struct DocState {
     /// a document as unavailable (RequestStatus::NotFound) if there are
     /// still dialers that might be able to find it
     any_dialer_connecting: bool,
+    /// Whether subduction is still searching for this document. Used to
+    /// delay NotFound transitions until subduction has also given up.
+    #[cfg(feature = "subduction")]
+    subduction_searching: bool,
 }
 
 #[derive(Debug)]
@@ -63,6 +67,8 @@ impl DocState {
             document_id,
             doc,
             any_dialer_connecting,
+            #[cfg(feature = "subduction")]
+            subduction_searching: true,
         }
     }
 
@@ -72,6 +78,8 @@ impl DocState {
             document_id,
             doc,
             any_dialer_connecting,
+            #[cfg(feature = "subduction")]
+            subduction_searching: false,
         }
     }
 
@@ -113,8 +121,13 @@ impl DocState {
 
     fn check_request_completion(&self) -> PhaseTransition {
         if let Phase::Requesting(request) = &self.phase {
+            #[cfg(feature = "subduction")]
+            let subduction_searching = self.subduction_searching;
+            #[cfg(not(feature = "subduction"))]
+            let subduction_searching = false;
+
             let RequestState { finished, found } =
-                request.status(&self.doc, self.any_dialer_connecting);
+                request.status(&self.doc, self.any_dialer_connecting, subduction_searching);
             if finished {
                 if found {
                     PhaseTransition::ToReady
@@ -156,10 +169,16 @@ impl DocState {
                 let eligible_conns = peer_connections
                     .values()
                     .any(|p| p.announce_policy() != AnnouncePolicy::DontAnnounce);
-                if eligible_conns || self.any_dialer_connecting {
+                #[cfg(feature = "subduction")]
+                let subduction_searching = self.subduction_searching;
+                #[cfg(not(feature = "subduction"))]
+                let subduction_searching = false;
+
+                if eligible_conns || self.any_dialer_connecting || subduction_searching {
                     tracing::debug!(
                         eligible_conns,
                         self.any_dialer_connecting,
+                        subduction_searching,
                         "no data found on disk, requesting document"
                     );
                     PhaseTransition::ToRequesting(Request::new(
@@ -423,6 +442,39 @@ impl DocState {
     /// unblock a NotFound transition.
     pub(crate) fn set_any_dialer_connecting(&mut self, out: &mut DocActorResult, value: bool) {
         self.any_dialer_connecting = value;
+        let transition = self.check_request_completion();
+        self.handle_phase_transition(out, transition);
+    }
+
+    /// Apply external data (e.g. from subduction) to the document.
+    ///
+    /// Loads each blob via `load_incremental`, detects head changes,
+    /// and transitions to Ready if the document now has content.
+    /// This reuses the same transition logic as `handle_load`.
+    #[cfg(feature = "subduction")]
+    pub(super) fn apply_external_data(&mut self, blobs: &[Vec<u8>], out: &mut DocActorResult) {
+        let heads_before = self.doc.get_heads();
+        for blob in blobs {
+            if let Err(e) = self.doc.load_incremental(blob) {
+                tracing::warn!(err = ?e, "error applying external data blob");
+            }
+        }
+        let heads_after = self.doc.get_heads();
+        if heads_before != heads_after {
+            out.emit_doc_changed(heads_after.clone());
+            if !heads_after.is_empty() && !matches!(self.phase, Phase::Ready(_)) {
+                tracing::debug!("transitioning to Ready from external data");
+                self.handle_phase_transition(out, PhaseTransition::ToReady);
+            }
+        }
+    }
+
+    /// Update whether subduction is still searching for this document and
+    /// re-evaluate request completion. Called when the Hub sends a
+    /// `SubductionRequestStatus` message.
+    #[cfg(feature = "subduction")]
+    pub(crate) fn set_subduction_searching(&mut self, out: &mut DocActorResult, value: bool) {
+        self.subduction_searching = value;
         let transition = self.check_request_completion();
         self.handle_phase_transition(out, transition);
     }

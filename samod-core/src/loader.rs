@@ -15,10 +15,21 @@ use crate::{
 ///
 /// ```rust,no_run
 /// use samod_core::{PeerId, SamodLoader, LoaderState, UnixTimestamp, io::{StorageResult, IoResult}};
+#[cfg_attr(
+    feature = "subduction",
+    doc = " use samod_core::actors::hub::subduction_sync::SubductionConfig;"
+)]
 /// use rand::SeedableRng;
 ///
 /// let mut rng = rand::rngs::StdRng::from_rng(&mut rand::rng());
-/// let mut loader = SamodLoader::new(PeerId::from("test"));
+#[cfg_attr(
+    not(feature = "subduction"),
+    doc = "let mut loader = SamodLoader::new(PeerId::from(\"test\"));"
+)]
+#[cfg_attr(
+    feature = "subduction",
+    doc = "let mut loader = SamodLoader::new(PeerId::from(\"test\"), SubductionConfig::new(&mut rng));"
+)]
 ///
 /// loop {
 ///     match loader.step(&mut rng, UnixTimestamp::now()) {
@@ -40,6 +51,8 @@ use crate::{
 pub struct SamodLoader {
     local_peer_id: PeerId,
     state: State,
+    #[cfg(feature = "subduction")]
+    subduction_config: crate::actors::hub::subduction_sync::SubductionConfig,
 }
 
 /// The current state of the loader.
@@ -72,10 +85,16 @@ impl SamodLoader {
     /// # Returns
     ///
     /// A new `SamodLoader` ready to begin the loading process.
-    pub fn new(local_peer_id: PeerId) -> Self {
+    pub fn new(
+        local_peer_id: PeerId,
+        #[cfg(feature = "subduction")]
+        subduction_config: crate::actors::hub::subduction_sync::SubductionConfig,
+    ) -> Self {
         Self {
             local_peer_id,
             state: State::Starting,
+            #[cfg(feature = "subduction")]
+            subduction_config,
         }
     }
 
@@ -112,6 +131,8 @@ impl SamodLoader {
                                 storage_id,
                                 self.local_peer_id.clone(),
                                 EphemeralSession::new(rng),
+                                #[cfg(feature = "subduction")]
+                                self.subduction_config.clone(),
                             );
                             return LoaderState::Loaded(Box::new(Hub::new(state)));
                         }
@@ -136,6 +157,8 @@ impl SamodLoader {
                     storage_id.clone(),
                     self.local_peer_id.clone(),
                     EphemeralSession::new(rng),
+                    #[cfg(feature = "subduction")]
+                    self.subduction_config.clone(),
                 );
                 LoaderState::Loaded(Box::new(Hub::new(state)))
             }

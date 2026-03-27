@@ -1,0 +1,33 @@
+[package]
+name = "subduction-sans-io"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "Sans-IO implementation of the subduction sync protocol"
+
+[dependencies]
+sedimentree_core = { path = "../../subduction/sedimentree_core", default-features = false }
+subduction_crypto = { path = "../../subduction/subduction_crypto", default-features = false }
+bijou64 = { path = "../../subduction/bijou64" }
+ed25519-dalek = { version = "2.1", default-features = false }
+blake3 = { version = "1.8", default-features = false }
+hex = { version = "0.4", default-features = false, features = ["alloc"] }
+tracing = "0.1"
+rand = "0.9"
+thiserror = { version = "2.0", default-features = false }
+
+[dev-dependencies]
+ed25519-dalek = { version = "2.1", features = ["std", "rand_core"] }
+sedimentree_core = { path = "../../subduction/sedimentree_core", features = ["std", "getrandom", "arbitrary"] }
+subduction_crypto = { path = "../../subduction/subduction_crypto", features = ["std", "arbitrary"] }
+bolero = { version = "0.13.4", features = ["arbitrary"] }
+arbitrary = "1.4"
+rand = "0.9"
+
+[features]
+default = ["std"]
+std = [
+    "sedimentree_core/std",
+    "subduction_crypto/std",
+    "thiserror/std",
+]

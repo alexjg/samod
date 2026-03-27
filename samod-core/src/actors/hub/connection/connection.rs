@@ -1,15 +1,19 @@
-use std::collections::HashMap;
-
 use crate::{
     ConnectionId, DocumentId, PeerId, UnixTimestamp,
-    actors::{hub::HubResults, messages::SyncMessage},
+    actors::hub::{HubResults, connection::repo_sync_connection::RepoSyncConnection},
     network::{
-        ConnDirection, ConnectionInfo, ConnectionOwner, ConnectionState, PeerDocState,
-        PeerMetadata, wire_protocol::WireMessage,
+        ConnDirection, ConnectionInfo, ConnectionOwner, ConnectionProtocol,
+        PeerDocState, PeerMetadata,
     },
 };
 
-use super::{EstablishedConnection, ReceiveEvent};
+#[cfg(feature = "subduction")]
+use crate::{
+    actors::hub::connection::SubductionConnection,
+    network::ConnectionState,
+};
+
+use super::{ConnOut, EstablishedConnection, ReceiveEvent};
 
 /// State of a network connection throughout its lifecycle.
 #[derive(Debug, Clone)]
@@ -19,8 +23,6 @@ pub struct Connection {
     owner: ConnectionOwner,
     local_peer_id: PeerId,
     local_metadata: Option<PeerMetadata>,
-    /// Current phase of the connection
-    phase: ConnectionPhase,
     /// When the connection was created
     #[allow(dead_code)]
     created_at: UnixTimestamp,
@@ -29,6 +31,14 @@ pub struct Connection {
     // Whether our state has changed since we last notified the event loop
     // (via `pop_new_state`)
     dirty: bool,
+    conn_type: ConnType,
+}
+
+#[derive(Debug, Clone)]
+enum ConnType {
+    Repo(RepoSyncConnection),
+    #[cfg(feature = "subduction")]
+    Subduction(SubductionConnection),
 }
 
 /// The phase of a connection's lifecycle.
@@ -50,41 +60,45 @@ pub(crate) struct ConnectionArgs {
 
 impl Connection {
     /// Create a new connection in handshaking state.
-    pub(crate) fn new_handshaking(
+    pub(crate) fn new(
         out: &mut HubResults,
-        ConnectionArgs {
-            direction,
+        protocol: ConnectionProtocol,
+        args: ConnectionArgs,
+    ) -> Self {
+        let id = ConnectionId::new();
+        let ConnectionArgs {
+            direction: _,
+            ref owner,
+            ref local_peer_id,
+            ref local_metadata,
+            ref created_at,
+        } = args;
+        let local_peer_id = local_peer_id.clone();
+        let local_metadata = local_metadata.clone();
+        let created_at = *created_at;
+        let owner = owner.clone();
+        let mut conn_out = ConnOut::new(id, created_at, out);
+        let conn_type = match protocol {
+            ConnectionProtocol::AutomergeSync => {
+                ConnType::Repo(RepoSyncConnection::new_handshaking(&mut conn_out, id, args))
+            }
+            #[cfg(feature = "subduction")]
+            ConnectionProtocol::Subduction { .. } => {
+                ConnType::Subduction(SubductionConnection::new(id, owner.clone(), created_at))
+            }
+        };
+        let last_sent = conn_out.last_sent();
+        Self {
+            id,
             owner,
             local_peer_id,
             local_metadata,
             created_at,
-        }: ConnectionArgs,
-    ) -> Self {
-        let mut conn = Self {
-            id: ConnectionId::new(),
-            owner,
-            local_peer_id: local_peer_id.clone(),
-            local_metadata: local_metadata.clone(),
-            phase: ConnectionPhase::WaitingForJoin,
-            created_at,
             last_received: None,
-            last_sent: None,
-            dirty: true, // We want to immediately notify of our new state
-        };
-        if let ConnDirection::Outgoing = direction {
-            conn.phase = ConnectionPhase::WaitingForPeer;
-            tracing::trace!(conn_id=?conn.id, "sending join message");
-            conn.send(
-                out,
-                created_at,
-                WireMessage::Join {
-                    sender_id: local_peer_id.clone(),
-                    supported_protocol_versions: vec!["1".to_string()],
-                    metadata: local_metadata.as_ref().map(|meta| meta.to_wire()),
-                },
-            );
+            last_sent,
+            dirty: true,
+            conn_type,
         }
-        conn
     }
 
     pub(crate) fn id(&self) -> ConnectionId {
@@ -99,276 +113,81 @@ impl Connection {
         &mut self,
         out: &mut HubResults,
         now: UnixTimestamp,
-        msg: WireMessage,
-    ) -> Vec<ReceiveEvent> {
+        msg: Vec<u8>,
+    ) -> Result<Vec<ReceiveEvent>, ReceiveError> {
         self.dirty = true;
         self.last_received = Some(now);
-        match self.phase {
-            ConnectionPhase::WaitingForJoin => match msg {
-                WireMessage::Join {
-                    sender_id,
-                    supported_protocol_versions,
-                    metadata,
-                } => {
-                    tracing::trace!(
-                        conn_id=?self.id,
-                        ?sender_id,
-                        ?supported_protocol_versions,
-                        "received Join message from peer"
-                    );
-                    if !supported_protocol_versions.contains(&"1".to_string()) {
-                        tracing::warn!(conn_id=?self.id, "peer does not support protocol version 1");
-                        self.send(
-                            out,
-                            now,
-                            WireMessage::Error {
-                                message: "unsupported protocol version".to_string(),
-                            },
-                        );
-                        self.phase = ConnectionPhase::Closed;
-                        return Vec::new();
-                    }
-                    tracing::trace!(conn_id=?self.id, "sending Peer message in response to Join");
-                    self.send(
-                        out,
-                        now,
-                        WireMessage::Peer {
-                            sender_id: self.local_peer_id.clone(),
-                            selected_protocol_version: "1".to_string(),
-                            target_id: sender_id.clone(),
-                            metadata: self.local_metadata.as_ref().map(|meta| meta.to_wire()),
-                        },
-                    );
-                    self.phase = ConnectionPhase::Established(EstablishedConnection {
-                        remote_peer_id: sender_id.clone(),
-                        remote_metadata: metadata.map(PeerMetadata::from_wire),
-                        protocol_version: "1".to_string(),
-                        established_at: now,
-                        document_subscriptions: HashMap::new(),
-                    });
-                    vec![ReceiveEvent::HandshakeComplete {
-                        remote_peer_id: sender_id,
-                    }]
+        match &mut self.conn_type {
+            ConnType::Repo(repo_conn) => {
+                let mut conn_out = ConnOut::new(self.id, now, out);
+                let result = repo_conn.receive_msg(&mut conn_out, now, msg);
+                if let Some(last_sent) = conn_out.last_sent() {
+                    self.last_sent = Some(last_sent);
                 }
-                other => {
-                    tracing::warn!(
-                        message=?other,
-                        conn_id=?self.id,
-                        "unexpected message received in WaitingForJoin phase"
-                    );
-                    self.send(
-                        out,
-                        now,
-                        WireMessage::Error {
-                            message: "expected a join message".to_string(),
-                        },
-                    );
-                    self.phase = ConnectionPhase::Closed;
-                    Vec::new()
-                }
-            },
-            ConnectionPhase::WaitingForPeer => match msg {
-                WireMessage::Peer {
-                    sender_id,
-                    selected_protocol_version,
-                    target_id,
-                    metadata,
-                } => {
-                    tracing::trace!(
-                        conn_id=?self.id,
-                        ?sender_id,
-                        ?selected_protocol_version,
-                        ?target_id,
-                        "received Peer message from peer"
-                    );
-                    if selected_protocol_version != "1" {
-                        tracing::warn!(conn_id=?self.id, "peer does not support protocol version 1");
-                        self.send(
-                            out,
-                            now,
-                            WireMessage::Error {
-                                message: "unsupported protocol version".to_string(),
-                            },
-                        );
-                        self.phase = ConnectionPhase::Closed;
-                        return Vec::new();
-                    }
-                    self.phase = ConnectionPhase::Established(EstablishedConnection {
-                        remote_peer_id: sender_id.clone(),
-                        remote_metadata: metadata.map(PeerMetadata::from_wire),
-                        protocol_version: selected_protocol_version,
-                        established_at: now,
-                        document_subscriptions: HashMap::new(),
-                    });
-                    vec![ReceiveEvent::HandshakeComplete {
-                        remote_peer_id: sender_id,
-                    }]
-                }
-                other => {
-                    tracing::warn!(
-                        message=?other,
-                        conn_id=?self.id,
-                        "unexpected message received in WaitingForPeer phase"
-                    );
-                    self.send(
-                        out,
-                        now,
-                        WireMessage::Error {
-                            message: "expected a peer message".to_string(),
-                        },
-                    );
-                    self.phase = ConnectionPhase::Closed;
-                    Vec::new()
-                }
-            },
-            ConnectionPhase::Established(_) => match msg {
-                WireMessage::Join { .. } | WireMessage::Peer { .. } => {
-                    tracing::warn!(
-                        message=?msg,
-                        conn_id=?self.id,
-                        "unexpected Join or Peer message received in Established phase"
-                    );
-                    self.send(
-                        out,
-                        now,
-                        WireMessage::Error {
-                            message: "unexpected join or peer message".to_string(),
-                        },
-                    );
-                    self.phase = ConnectionPhase::Closed;
-                    Vec::new()
-                }
-                WireMessage::Leave { sender_id } => {
-                    tracing::trace!(conn_id=?self.id, ?sender_id, "received Leave message");
-                    self.phase = ConnectionPhase::Closed;
-                    Vec::new()
-                }
-                WireMessage::Request {
-                    document_id,
-                    sender_id,
-                    target_id,
-                    data,
-                } => vec![ReceiveEvent::SyncMessage {
-                    doc_id: document_id,
-                    sender_id,
-                    target_id,
-                    msg: SyncMessage::Request { data },
-                }],
-                WireMessage::Sync {
-                    document_id,
-                    sender_id,
-                    target_id,
-                    data,
-                } => vec![ReceiveEvent::SyncMessage {
-                    doc_id: document_id,
-                    sender_id,
-                    target_id,
-                    msg: SyncMessage::Sync { data },
-                }],
-                WireMessage::DocUnavailable {
-                    sender_id,
-                    target_id,
-                    document_id,
-                } => vec![ReceiveEvent::SyncMessage {
-                    doc_id: document_id,
-                    sender_id,
-                    target_id,
-                    msg: SyncMessage::DocUnavailable,
-                }],
-                WireMessage::Ephemeral {
-                    sender_id,
-                    target_id,
-                    count,
-                    session_id,
-                    document_id,
-                    data,
-                } => {
-                    vec![ReceiveEvent::EphemeralMessage {
-                        doc_id: document_id,
-                        sender_id,
-                        target_id,
-                        count,
-                        session_id: session_id.into(),
-                        msg: data,
-                    }]
-                }
-                WireMessage::RemoteHeadsChanged { .. }
-                | WireMessage::RemoteSubscriptionChange { .. } => vec![],
-                WireMessage::Error { message } => {
-                    tracing::warn!(
-                        conn_id=?self.id,
-                        "received error message in established phase: {}",
-                        message
-                    );
-                    self.phase = ConnectionPhase::Closed;
-                    Vec::new()
-                }
-            },
-            ConnectionPhase::Closed => {
-                tracing::warn!(conn_id=?self.id, "received message in closed connection phase");
-                Vec::new()
+                result
+            }
+            #[cfg(feature = "subduction")]
+            ConnType::Subduction(_subduction_conn) => {
+                Ok(vec![ReceiveEvent::SubductionMessage(msg)])
             }
         }
     }
 
     /// Get the established connection if in established phase.
     pub(crate) fn established_connection(&self) -> Option<&EstablishedConnection> {
-        match &self.phase {
-            ConnectionPhase::Established(conn) => Some(conn),
-            _ => None,
-        }
+        let ConnType::Repo(repo_conn) = &self.conn_type else {
+            return None;
+        };
+        repo_conn.established_connection()
     }
 
     /// Get the established connection if in established phase.
     pub(crate) fn established_connection_mut(&mut self) -> Option<&mut EstablishedConnection> {
-        match &mut self.phase {
-            ConnectionPhase::Established(conn) => Some(conn),
-            _ => None,
-        }
+        self.dirty = true;
+        let ConnType::Repo(repo_conn) = &mut self.conn_type else {
+            return None;
+        };
+        repo_conn.established_connection_mut()
     }
 
     /// Get the remote peer ID if established.
     pub(crate) fn remote_peer_id(&self) -> Option<&PeerId> {
-        if let ConnectionPhase::Established(EstablishedConnection { remote_peer_id, .. }) =
-            &self.phase
-        {
-            Some(remote_peer_id)
-        } else {
-            None
-        }
+        let ConnType::Repo(repo_conn) = &self.conn_type else {
+            return None;
+        };
+        repo_conn.remote_peer_id()
     }
 
     /// Add a document subscription.
     pub(crate) fn add_document(&mut self, document_id: DocumentId) {
-        let ConnectionPhase::Established(established) = &mut self.phase else {
-            panic!("Cannot add document subscription in non-established phase");
+        self.dirty = true;
+        let ConnType::Repo(repo_conn) = &mut self.conn_type else {
+            panic!("Cannot add document subscription in non-repo connection");
         };
-        established
-            .document_subscriptions
-            .insert(document_id.clone(), PeerDocState::empty());
+        repo_conn.add_document(document_id);
     }
 
     pub(crate) fn update_peer_state(&mut self, document_id: &DocumentId, state: PeerDocState) {
-        let ConnectionPhase::Established(established) = &mut self.phase else {
-            tracing::warn!("attmpeted to update document for non-established connection");
+        self.dirty = true;
+        let ConnType::Repo(repo_conn) = &mut self.conn_type else {
             return;
         };
-        if let Some(doc_state) = established.document_subscriptions.get_mut(document_id) {
-            self.dirty = true;
-            *doc_state = state;
-        } else {
-            tracing::warn!(?document_id, "tried to update state for unknown document",);
-        }
+        repo_conn.update_peer_state(document_id, state);
     }
 
     pub(crate) fn is_closed(&self) -> bool {
-        matches!(self.phase, ConnectionPhase::Closed)
+        let ConnType::Repo(repo_conn) = &self.conn_type else {
+            return false;
+        };
+        return repo_conn.is_closed();
     }
 
-    fn send(&mut self, out: &mut HubResults, now: UnixTimestamp, msg: WireMessage) {
+    /// Send a message on this connection, automatically tracking the sent timestamp.
+    pub(crate) fn send(&mut self, out: &mut HubResults, now: UnixTimestamp, msg: Vec<u8>) {
+        let mut conn_out = ConnOut::new(self.id, now, out);
+        conn_out.send(self.remote_peer_id(), msg);
         self.dirty = true;
         self.last_sent = Some(now);
-        out.send(self, msg.encode());
     }
 
     pub(crate) fn last_received(&self) -> Option<UnixTimestamp> {
@@ -380,21 +199,25 @@ impl Connection {
     }
 
     pub(crate) fn info(&self) -> ConnectionInfo {
-        let (doc_connections, state) = match &self.phase {
-            ConnectionPhase::Established(established) => (
-                established.document_subscriptions().clone(),
-                ConnectionState::Connected {
-                    their_peer_id: established.remote_peer_id().clone(),
-                },
-            ),
-            _ => (HashMap::new(), ConnectionState::Handshaking),
-        };
-        ConnectionInfo {
-            id: self.id,
-            last_received: self.last_received,
-            last_sent: self.last_sent,
-            docs: doc_connections,
-            state,
+        match &self.conn_type {
+            ConnType::Repo(repo_conn) => {
+                let repo_info = repo_conn.info();
+                ConnectionInfo {
+                    id: self.id,
+                    last_received: self.last_received,
+                    last_sent: self.last_sent,
+                    docs: repo_info.docs,
+                    state: repo_info.state,
+                }
+            }
+            #[cfg(feature = "subduction")]
+            ConnType::Subduction(_) => ConnectionInfo {
+                id: self.id,
+                last_received: self.last_received,
+                last_sent: self.last_sent,
+                docs: std::collections::HashMap::new(),
+                state: ConnectionState::Handshaking,
+            },
         }
     }
 
@@ -409,3 +232,20 @@ impl Connection {
         }
     }
 }
+
+#[derive(Debug)]
+pub(crate) struct ReceiveError(String);
+
+impl ReceiveError {
+    pub(crate) fn new(msg: impl Into<String>) -> Self {
+        Self(msg.into())
+    }
+}
+
+impl std::fmt::Display for ReceiveError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl std::error::Error for ReceiveError {}

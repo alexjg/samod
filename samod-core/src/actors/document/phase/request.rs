@@ -191,9 +191,14 @@ impl Request {
         }
     }
 
-    pub(crate) fn status(&self, doc: &Automerge, any_dialer_connecting: bool) -> RequestState {
+    pub(crate) fn status(
+        &self,
+        doc: &Automerge,
+        any_dialer_connecting: bool,
+        subduction_searching: bool,
+    ) -> RequestState {
         if tracing::enabled!(tracing::Level::TRACE) {
-            tracing::trace!(?self.peer_states, any_dialer_connecting, "checking if request is done");
+            tracing::trace!(?self.peer_states, any_dialer_connecting, subduction_searching, "checking if request is done");
         }
         let all_peers_unavailable = self.peer_states.values().all(|peer| {
             matches!(
@@ -204,14 +209,16 @@ impl Request {
             )
         });
 
-        // If a dialer is connecting we expect a new peer soon, so don't
-        // consider all avenues exhausted even if every current peer is
-        // unavailable.
-        let all_unavailable = all_peers_unavailable && !any_dialer_connecting;
+        // Don't consider all avenues exhausted if a dialer is connecting
+        // (we expect a new peer soon) or if subduction is still searching.
+        let all_unavailable =
+            all_peers_unavailable && !any_dialer_connecting && !subduction_searching;
 
-        if all_peers_unavailable && any_dialer_connecting {
+        if all_peers_unavailable && (any_dialer_connecting || subduction_searching) {
             tracing::debug!(
-                "All current peers are unavailable but a dialer is connecting, waiting"
+                any_dialer_connecting,
+                subduction_searching,
+                "All current peers are unavailable but still waiting on other avenues"
             );
         } else if all_unavailable {
             tracing::debug!("All peers are unavailable, sync complete");

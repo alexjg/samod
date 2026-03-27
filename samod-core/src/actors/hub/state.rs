@@ -8,7 +8,7 @@ use crate::{
         document::{DocumentStatus, SpawnArgs},
         hub::{
             Command, HubEvent, HubEventPayload, HubInput, HubResults,
-            connection::{ConnectionArgs, ReceiveEvent},
+            connection::{ConnectionArgs, ReceiveError, ReceiveEvent},
             dialer::{ConnectionLostOutcome, DialerState},
             io::{HubIoAction, HubIoResult},
             listener::ListenerState,
@@ -62,6 +62,10 @@ pub(crate) struct State {
     /// Cached dialer states last broadcast to document actors, used for
     /// change detection so we only send updates when something changed.
     last_dialer_states: HashMap<DialerId, DocDialerState>,
+
+    /// Subduction protocol handler.
+    #[cfg(feature = "subduction")]
+    subduction: super::subduction_sync::SubductionSync,
 }
 
 impl State {
@@ -69,6 +73,7 @@ impl State {
         storage_id: StorageId,
         peer_id: PeerId,
         ephemeral_session: EphemeralSession,
+        #[cfg(feature = "subduction")] subduction_config: super::subduction_sync::SubductionConfig,
     ) -> Self {
         Self {
             storage_id,
@@ -82,6 +87,8 @@ impl State {
             dialers: HashMap::new(),
             listeners: HashMap::new(),
             last_dialer_states: HashMap::new(),
+            #[cfg(feature = "subduction")]
+            subduction: super::subduction_sync::SubductionSync::new(subduction_config),
         }
     }
 
@@ -136,6 +143,8 @@ impl State {
         if notify_doc_actors {
             self.notify_doc_actors_of_removed_connection(results, *connection_id);
         }
+        #[cfg(feature = "subduction")]
+        self.subduction.connection_lost(*connection_id);
         Some(conn)
     }
 
@@ -400,6 +409,22 @@ impl State {
                     HubIoResult::Send | HubIoResult::Disconnect => {
                         // Nothing to do here
                     }
+                    HubIoResult::Storage(_storage_result) => {
+                        #[cfg(feature = "subduction")]
+                        self.subduction.handle_storage_result(
+                            io_completion.task_id,
+                            _storage_result,
+                            results,
+                        );
+                    }
+                    #[cfg(feature = "subduction")]
+                    HubIoResult::Sign { signature } => {
+                        self.subduction.handle_sign_result(
+                            io_completion.task_id,
+                            signature,
+                            results,
+                        );
+                    }
                 }
             }
             HubEventPayload::Input(input) => {
@@ -454,7 +479,7 @@ impl State {
                                     document_id,
                                 }
                                 .from_sync_message(message);
-                                results.send(conn, wire_message.encode());
+                                conn.send(results, now, wire_message.encode());
                             } else {
                                 tracing::warn!(
                                     ?connection_id,
@@ -466,11 +491,19 @@ impl State {
                             self.update_peer_states(actor_id, new_states);
                         }
                         DocToHubMsgPayload::Broadcast { connections, msg } => {
-                            self.broadcast(results, actor_id, connections, msg);
+                            self.broadcast(now, results, actor_id, connections, msg);
                         }
                         DocToHubMsgPayload::Terminated => {
                             tracing::debug!(?actor_id, "document actor terminated");
                             self.actors.remove(&actor_id);
+                        }
+                        #[cfg(feature = "subduction")]
+                        DocToHubMsgPayload::NewChangesForSubduction {
+                            document_id,
+                            changes,
+                        } => {
+                            self.subduction
+                                .on_new_changes_from_doc(&document_id, changes, results);
                         }
                     },
                     HubInput::ConnectionLost { connection_id } => {
@@ -565,6 +598,37 @@ impl State {
         // Broadcast dialer state changes to all document actors
         self.broadcast_dialer_states_if_changed(results);
 
+        // Deliver subduction data to document actors
+        #[cfg(feature = "subduction")]
+        {
+            for data in self.subduction.data_for_docs.drain(..) {
+                if let Some(actor_id) = self.document_to_actor.get(&data.document_id) {
+                    use subduction_sans_io::engine::SearchStatus;
+                    if !data.blobs.is_empty() {
+                        results.send_to_doc_actor(
+                            *actor_id,
+                            HubToDocMsgPayload::ApplySubductionData { blobs: data.blobs },
+                        );
+                    }
+                    let status = match data.status {
+                        SearchStatus::Searching => {
+                            crate::actors::messages::SubductionSearchStatus::Searching
+                        }
+                        SearchStatus::Found => {
+                            crate::actors::messages::SubductionSearchStatus::Found
+                        }
+                        SearchStatus::NotFound => {
+                            crate::actors::messages::SubductionSearchStatus::NotFound
+                        }
+                    };
+                    results.send_to_doc_actor(
+                        *actor_id,
+                        HubToDocMsgPayload::SubductionRequestStatus { status },
+                    );
+                }
+            }
+        }
+
         for (command_id, result) in self.pop_completed_commands() {
             results.completed_commands.insert(command_id, result);
         }
@@ -626,29 +690,21 @@ impl State {
             };
         };
 
-        let msg = match WireMessage::decode(&msg) {
-            Ok(msg) => msg,
+        let events = match conn.receive_msg(out, now, msg) {
+            Ok(events) => events,
             Err(e) => {
-                tracing::warn!(
-                    ?connection_id,
-                    err=?e,
-                    "failed to decode message: {}",
-                    e
-                );
-                let error_msg = format!("Message decode error: {e}");
                 if let Some(conn) = self.connections.get(&connection_id) {
-                    tracing::debug!(error=?error_msg, remote_peer_id=?conn.remote_peer_id(), "failing connection");
+                    tracing::debug!(error=%e, remote_peer_id=?conn.remote_peer_id(), "failing connection");
                     self.remove_connection(out, &connection_id);
                 }
-
                 return CommandResult::Receive {
                     connection_id,
-                    error: Some(format!("Decode error: {e}")),
+                    error: Some(e.to_string()),
                 };
             }
         };
 
-        for evt in conn.receive_msg(out, now, msg) {
+        for evt in events {
             match evt {
                 ReceiveEvent::HandshakeComplete { remote_peer_id } => {
                     tracing::debug!(?connection_id, ?remote_peer_id, "handshake completed");
@@ -712,6 +768,14 @@ impl State {
                         )
                     }
                 }
+                #[cfg(feature = "subduction")]
+                ReceiveEvent::SubductionMessage(msg) => {
+                    self.subduction.handle_bytes(connection_id, msg, now, out);
+                    return CommandResult::Receive {
+                        connection_id,
+                        error: None,
+                    };
+                }
             }
         }
         CommandResult::Receive {
@@ -746,7 +810,17 @@ impl State {
                 },
             );
         } else {
-            self.spawn_actor(out, doc_id, None, Some((connection_id, msg)));
+            let _actor_id = self.spawn_actor(out, doc_id.clone(), None, Some((connection_id, msg)));
+            // This actor was spawned from an incoming sync message, not from
+            // find_document. Tell it that subduction is NOT searching so it
+            // doesn't wait for subduction to report.
+            #[cfg(feature = "subduction")]
+            out.send_to_doc_actor(
+                _actor_id,
+                HubToDocMsgPayload::SubductionRequestStatus {
+                    status: crate::actors::messages::SubductionSearchStatus::NotFound,
+                },
+            );
         }
     }
 
@@ -806,6 +880,22 @@ impl State {
         tracing::trace!("no existing actor found for document, spawning new actor");
 
         self.spawn_actor(out, document_id.clone(), None, None);
+
+        // Tell subduction to look for this document too
+        #[cfg(feature = "subduction")]
+        {
+            self.subduction.find_document(&document_id, out);
+            // Notify the DocumentActor that subduction is searching, so it
+            // doesn't prematurely declare NotFound.
+            if let Some(actor_id) = self.document_to_actor.get(&document_id) {
+                out.send_to_doc_actor(
+                    *actor_id,
+                    HubToDocMsgPayload::SubductionRequestStatus {
+                        status: crate::actors::messages::SubductionSearchStatus::Searching,
+                    },
+                );
+            }
+        }
 
         self.add_pending_find_command(document_id, command_id);
         None
@@ -903,6 +993,7 @@ impl State {
 
     fn broadcast(
         &mut self,
+        now: UnixTimestamp,
         out: &mut HubResults,
         from_actor: DocumentActorId,
         to_connections: Vec<ConnectionId>,
@@ -956,7 +1047,7 @@ impl State {
                     data: data.clone(),
                 },
             };
-            out.send(conn, msg.encode());
+            conn.send(out, now, msg.encode());
         }
     }
 
@@ -1001,7 +1092,7 @@ impl State {
         let dialer_id = DialerId::new();
         let url = config.url.clone();
 
-        let mut dialer = DialerState::new(dialer_id, config.url, config.backoff);
+        let mut dialer = DialerState::new(dialer_id, config.url, config.backoff, config.protocol);
 
         // Emit the first DialRequest immediately
         dialer.mark_transport_pending();
@@ -1025,7 +1116,7 @@ impl State {
         let listener_id = ListenerId::new();
         let url = config.url.clone();
 
-        let listener = ListenerState::new(listener_id, config.url);
+        let listener = ListenerState::new(listener_id, config.url, config.protocol);
 
         tracing::debug!(
             ?listener_id,
@@ -1103,9 +1194,15 @@ impl State {
         }
 
         let owner = ConnectionOwner::Dialer(dialer_id);
+        let protocol = self
+            .dialers
+            .get(&dialer_id)
+            .map(|d| d.protocol)
+            .unwrap_or_default();
         let local_metadata = self.get_local_metadata();
-        let conn = Connection::new_handshaking(
+        let conn = Connection::new(
             out,
+            protocol,
             ConnectionArgs {
                 direction: ConnDirection::Outgoing,
                 owner,
@@ -1127,6 +1224,13 @@ impl State {
         }
 
         self.add_connection(connection_id, conn);
+
+        // Notify SubductionSync of new outgoing subduction connection
+        #[cfg(feature = "subduction")]
+        if let crate::network::ConnectionProtocol::Subduction { audience } = protocol {
+            self.subduction
+                .new_connection(connection_id, true, audience, now, out);
+        }
 
         tracing::debug!(?dialer_id, ?connection_id, "dialer connection created");
 
@@ -1154,9 +1258,15 @@ impl State {
         }
 
         let owner = ConnectionOwner::Listener(listener_id);
+        let protocol = self
+            .listeners
+            .get(&listener_id)
+            .map(|l| l.protocol)
+            .unwrap_or_default();
         let local_metadata = self.get_local_metadata();
-        let conn = Connection::new_handshaking(
+        let conn = Connection::new(
             out,
+            protocol,
             ConnectionArgs {
                 direction: ConnDirection::Incoming,
                 owner,
@@ -1171,6 +1281,13 @@ impl State {
             listener.add_connection(connection_id);
         }
         self.add_connection(connection_id, conn);
+
+        // Notify SubductionSync of new incoming subduction connection
+        #[cfg(feature = "subduction")]
+        if let crate::network::ConnectionProtocol::Subduction { audience } = protocol {
+            self.subduction
+                .new_connection(connection_id, false, audience, now, out);
+        }
 
         tracing::debug!(?listener_id, ?connection_id, "listener connection created");
 

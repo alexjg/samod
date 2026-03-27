@@ -19,4 +19,6 @@ pub(crate) enum ReceiveEvent {
         session_id: EphemeralSessionId,
         msg: Vec<u8>,
     },
+    #[cfg(feature = "subduction")]
+    SubductionMessage(Vec<u8>),
 }

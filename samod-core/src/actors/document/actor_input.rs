@@ -36,6 +36,16 @@ pub(crate) enum ActorInput {
     DialerStatesChanged {
         dialers: HashMap<DialerId, DocDialerState>,
     },
+    /// Apply data received via subduction to the automerge document.
+    #[cfg(feature = "subduction")]
+    ApplySubductionData {
+        blobs: Vec<Vec<u8>>,
+    },
+    /// Update on subduction's search for this document.
+    #[cfg(feature = "subduction")]
+    SubductionRequestStatus {
+        status: crate::actors::messages::SubductionSearchStatus,
+    },
 }
 
 /// Convert external messages to internal input messages
@@ -65,6 +75,14 @@ impl From<HubToDocMsgPayload> for ActorInput {
             HubToDocMsgPayload::RequestAgain => ActorInput::Request,
             HubToDocMsgPayload::DialerStatesChanged { dialers } => {
                 ActorInput::DialerStatesChanged { dialers }
+            }
+            #[cfg(feature = "subduction")]
+            HubToDocMsgPayload::ApplySubductionData { blobs } => {
+                ActorInput::ApplySubductionData { blobs }
+            }
+            #[cfg(feature = "subduction")]
+            HubToDocMsgPayload::SubductionRequestStatus { status } => {
+                ActorInput::SubductionRequestStatus { status }
             }
         }
     }

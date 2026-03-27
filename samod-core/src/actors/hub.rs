@@ -18,6 +18,8 @@ pub mod io;
 pub(crate) mod listener;
 mod state;
 pub(crate) use state::State;
+#[cfg(feature = "subduction")]
+pub mod subduction_sync;
 
 use crate::{ConnectionId, PeerId, SamodLoader, StorageId, UnixTimestamp, network::ConnectionInfo};
 
@@ -45,8 +47,15 @@ impl Hub {
     /// # Returns
     ///
     /// A `SamodLoader` that will eventually yield a loaded `Samod` instance.
-    pub fn load(peer_id: PeerId) -> SamodLoader {
-        SamodLoader::new(peer_id)
+    pub fn load(
+        peer_id: PeerId,
+        #[cfg(feature = "subduction")] subduction_config: subduction_sync::SubductionConfig,
+    ) -> SamodLoader {
+        SamodLoader::new(
+            peer_id,
+            #[cfg(feature = "subduction")]
+            subduction_config,
+        )
     }
 
     /// Processes an event and returns any resulting IO tasks or command completions.
@@ -152,4 +161,5 @@ impl Hub {
     pub fn dialer_attempt(&self, dialer_id: crate::DialerId) -> Option<u32> {
         self.state.dialer_attempt(dialer_id)
     }
+
 }

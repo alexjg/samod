@@ -1,5 +1,7 @@
 use std::time::Duration;
 
+#[cfg(feature = "subduction")]
+use samod_core::actors::hub::subduction_sync::SubductionConfig;
 use samod_core::{
     BackoffConfig, CommandResult, DialerConfig, DialerEvent, DialerId, ListenerConfig, ListenerId,
     StorageKey, UnixTimestamp,
@@ -9,14 +11,18 @@ use samod_core::{
 
 /// Helper: create a Hub via the loader.
 fn make_hub(name: &str) -> Hub {
-    use rand::SeedableRng;
+    // use rand::SeedableRng;
     use samod_core::{LoaderState, PeerId, SamodLoader};
     use std::collections::HashMap;
 
     let peer_id = PeerId::from_string(name.to_string());
+    // let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+    let mut rng = rand::rng();
+    #[cfg(not(feature = "subduction"))]
     let mut loader = SamodLoader::new(peer_id);
+    #[cfg(feature = "subduction")]
+    let mut loader = SamodLoader::new(peer_id, SubductionConfig::new(&mut rng));
     let now = UnixTimestamp::from_millis(1000);
-    let mut rng = rand::rngs::StdRng::seed_from_u64(42);
     let mut storage: HashMap<StorageKey, Vec<u8>> = HashMap::new();
 
     loop {
@@ -193,6 +199,7 @@ fn dialer_emits_dial_request_on_add() {
     let config = DialerConfig {
         url: url.clone(),
         backoff: BackoffConfig::default(),
+        protocol: Default::default(),
     };
 
     let (dialer_id, results) = add_dialer(&mut hub, &mut rng, now, config);
@@ -210,7 +217,10 @@ fn listener_does_not_emit_dial_request() {
     let now = UnixTimestamp::from_millis(1000);
 
     let url = url::Url::parse("ws://0.0.0.0:8080").unwrap();
-    let config = ListenerConfig { url };
+    let config = ListenerConfig {
+        url,
+        protocol: Default::default(),
+    };
 
     let (_listener_id, results) = add_listener(&mut hub, &mut rng, now, config);
 
@@ -227,6 +237,7 @@ fn dialer_create_connection_transitions_to_connected() {
     let config = DialerConfig {
         url,
         backoff: BackoffConfig::default(),
+        protocol: Default::default(),
     };
 
     let (dialer_id, _results) = add_dialer(&mut hub, &mut rng, now, config);
@@ -254,6 +265,7 @@ fn dialer_dial_failed_schedules_retry() {
             max_delay: Duration::from_secs(30),
             max_retries: None,
         },
+        protocol: Default::default(),
     };
 
     let (dialer_id, _results) = add_dialer(&mut hub, &mut rng, now, config);
@@ -285,6 +297,7 @@ fn dialer_retries_after_tick() {
             max_delay: Duration::from_secs(30),
             max_retries: None,
         },
+        protocol: Default::default(),
     };
 
     let (dialer_id, _results) = add_dialer(&mut hub, &mut rng, now, config);
@@ -322,6 +335,7 @@ fn dialer_max_retries_reached() {
             max_delay: Duration::from_secs(30),
             max_retries: Some(2),
         },
+        protocol: Default::default(),
     };
 
     let (dialer_id, _results) = add_dialer(&mut hub, &mut rng, now, config);
@@ -398,6 +412,7 @@ fn dialer_connection_lost_triggers_backoff() {
             max_delay: Duration::from_secs(30),
             max_retries: None,
         },
+        protocol: Default::default(),
     };
 
     let (dialer_id, _results) = add_dialer(&mut hub, &mut rng, now, config);
@@ -426,7 +441,10 @@ fn listener_accepts_multiple_connections() {
     let now = UnixTimestamp::from_millis(1000);
 
     let url = url::Url::parse("ws://0.0.0.0:8080").unwrap();
-    let config = ListenerConfig { url };
+    let config = ListenerConfig {
+        url,
+        protocol: Default::default(),
+    };
 
     let (listener_id, _results) = add_listener(&mut hub, &mut rng, now, config);
 
@@ -443,7 +461,10 @@ fn listener_connection_lost_does_not_retry() {
     let now = UnixTimestamp::from_millis(1000);
 
     let url = url::Url::parse("ws://0.0.0.0:8080").unwrap();
-    let config = ListenerConfig { url };
+    let config = ListenerConfig {
+        url,
+        protocol: Default::default(),
+    };
 
     let (listener_id, _results) = add_listener(&mut hub, &mut rng, now, config);
 
@@ -469,6 +490,7 @@ fn remove_dialer_stops_retries() {
     let config = DialerConfig {
         url,
         backoff: BackoffConfig::default(),
+        protocol: Default::default(),
     };
 
     let (dialer_id, _results) = add_dialer(&mut hub, &mut rng, now, config);
@@ -494,6 +516,7 @@ fn backoff_delay_increases_exponentially() {
             max_delay: Duration::from_secs(60),
             max_retries: None,
         },
+        protocol: Default::default(),
     };
 
     let (dialer_id, _results) = add_dialer(&mut hub, &mut rng, now, config);
@@ -546,6 +569,7 @@ fn backoff_capped_at_max_delay() {
             max_delay,
             max_retries: None,
         },
+        protocol: Default::default(),
     };
 
     let (dialer_id, _results) = add_dialer(&mut hub, &mut rng, now, config);
@@ -578,7 +602,10 @@ fn find_listener_for_url() {
 
     assert!(hub.find_listener_for_url(&url1).is_none());
 
-    let config = ListenerConfig { url: url1.clone() };
+    let config = ListenerConfig {
+        url: url1.clone(),
+        protocol: Default::default(),
+    };
     let (listener_id, _) = add_listener(&mut hub, &mut rng, now, config);
 
     assert_eq!(hub.find_listener_for_url(&url1), Some(listener_id));
@@ -599,6 +626,7 @@ fn dialer_attempt_tracking() {
             max_delay: Duration::from_secs(30),
             max_retries: None,
         },
+        protocol: Default::default(),
     };
 
     let (dialer_id, _) = add_dialer(&mut hub, &mut rng, now, config);
