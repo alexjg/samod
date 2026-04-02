@@ -290,9 +290,20 @@ pub fn reassemble_sedimentree_from_range(
         }
     }
 
+    let raw = Sedimentree::new(fragment_list, loose_commits);
+    let minimized = raw.minimize(&sedimentree_core::commit::CountLeadingZeroBytes);
+
+    // Filter the signed data maps to only include items in the minimized tree.
+    let minimized_commit_digests: std::collections::HashSet<_> =
+        minimized.commit_entries().map(|(d, _)| *d).collect();
+    let minimized_fragment_digests: std::collections::HashSet<_> =
+        minimized.fragment_entries().map(|(d, _)| *d).collect();
+    commits.retain(|d, _| minimized_commit_digests.contains(d));
+    fragments_map.retain(|d, _| minimized_fragment_digests.contains(d));
+
     BatchSyncIoResult::Sedimentree {
         id: sed_id,
-        sedimentree: Sedimentree::new(fragment_list, loose_commits),
+        sedimentree: minimized,
         commits,
         fragments: fragments_map,
     }

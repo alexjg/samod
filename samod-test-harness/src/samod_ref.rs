@@ -82,6 +82,14 @@ impl SamodRef<'_> {
         self.wrapper().connection_events().to_vec()
     }
 
+    /// Returns all subduction events captured during event processing.
+    #[cfg(feature = "subduction")]
+    pub fn subduction_events(
+        &mut self,
+    ) -> Vec<samod_core::actors::hub::hub_results::SubductionEvent> {
+        self.wrapper().subduction_events().to_vec()
+    }
+
     /// Clears all captured connection events.
     pub fn clear_connection_events(&mut self) {
         self.wrapper().clear_connection_events()

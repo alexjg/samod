@@ -206,6 +206,18 @@ impl SubductionSync {
             }
         }
 
+        for metrics in output.batch_sync_metrics {
+            if let Some(doc_id) = DocumentId::from_sedimentree_id(&metrics.sed_id) {
+                hub_out.subduction_events.push(
+                    super::hub_results::SubductionEvent::BatchSyncComplete {
+                        document_id: doc_id,
+                        commits_downloaded: metrics.commits_downloaded,
+                        fragments_downloaded: metrics.fragments_downloaded,
+                    },
+                );
+            }
+        }
+
         for (sed_id, status) in output.search_status {
             if let Some(doc_id) = DocumentId::from_sedimentree_id(&sed_id) {
                 // Check if we already have a data_for_docs entry for this doc

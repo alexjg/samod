@@ -38,6 +38,9 @@ pub struct SamodWrapper {
     document_actors: HashMap<DocumentActorId, DocActorRunner>,
     // Connection events captured during event processing
     connection_events: Vec<ConnectionEvent>,
+    // Subduction sync events captured during event processing
+    #[cfg(feature = "subduction")]
+    subduction_events: Vec<samod_core::actors::hub::hub_results::SubductionEvent>,
     announce_policy: Box<dyn Fn(DocumentId, PeerId) -> bool>,
     /// A test listener ID used for incoming connections.
     test_listener_id: Option<ListenerId>,
@@ -101,6 +104,8 @@ impl SamodWrapper {
             outbox: HashMap::new(),
             document_actors: HashMap::new(),
             connection_events: Vec::new(),
+            #[cfg(feature = "subduction")]
+            subduction_events: Vec::new(),
             announce_policy: Box::new(|_, _| true),
             test_listener_id: None,
             #[cfg(feature = "subduction")]
@@ -378,6 +383,12 @@ impl SamodWrapper {
                 self.connection_events.push(event);
             }
 
+            // Capture subduction events
+            #[cfg(feature = "subduction")]
+            for event in results.subduction_events {
+                self.subduction_events.push(event);
+            }
+
             // Handle IO tasks
             self.execute_io_tasks(results.new_tasks);
 
@@ -548,6 +559,12 @@ impl SamodWrapper {
     /// such as handshake completions, failures, and connection state changes.
     pub fn connection_events(&self) -> &[ConnectionEvent] {
         &self.connection_events
+    }
+
+    /// Returns all subduction events captured during event processing.
+    #[cfg(feature = "subduction")]
+    pub fn subduction_events(&self) -> &[samod_core::actors::hub::hub_results::SubductionEvent] {
+        &self.subduction_events
     }
 
     /// Clears all captured connection events.

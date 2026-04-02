@@ -12,7 +12,7 @@ pub use hub_event::HubEvent;
 pub(crate) use hub_input::HubInput;
 mod hub_event_payload;
 pub(crate) use hub_event_payload::HubEventPayload;
-mod hub_results;
+pub mod hub_results;
 pub use hub_results::HubResults;
 pub mod io;
 pub(crate) mod listener;

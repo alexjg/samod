@@ -14,6 +14,20 @@ use crate::{
 
 use super::io::HubIoAction;
 
+/// Events related to subduction sync, useful for metrics and testing.
+#[cfg(feature = "subduction")]
+#[derive(Debug, Clone)]
+pub enum SubductionEvent {
+    /// A batch sync completed, downloading data from a peer.
+    BatchSyncComplete {
+        document_id: crate::DocumentId,
+        /// Number of loose commits downloaded.
+        commits_downloaded: usize,
+        /// Number of fragments (chunks) downloaded.
+        fragments_downloaded: usize,
+    },
+}
+
 /// Results returned from processing an event in the `Hub`
 ///
 /// `HubResults` contains the outcomes of processing an event through
@@ -47,6 +61,10 @@ pub struct HubResults {
 
     /// Dialer lifecycle events (e.g. max retries reached).
     pub dialer_events: Vec<DialerEvent>,
+
+    /// Subduction sync events (metrics, status changes).
+    #[cfg(feature = "subduction")]
+    pub subduction_events: Vec<SubductionEvent>,
 
     /// Indicates whether the hub is currently stopped.
     pub stopped: bool,

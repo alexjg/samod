@@ -116,6 +116,17 @@ pub enum SearchStatus {
     NotFound,
 }
 
+/// Metrics from a completed batch sync.
+#[derive(Debug, Clone)]
+pub struct BatchSyncMetrics {
+    /// The sedimentree that was synced.
+    pub sed_id: SedimentreeId,
+    /// Number of loose commits downloaded.
+    pub commits_downloaded: usize,
+    /// Number of fragments downloaded.
+    pub fragments_downloaded: usize,
+}
+
 /// Output from processing an input event.
 #[derive(Debug)]
 pub struct EngineOutput<C> {
@@ -129,6 +140,8 @@ pub struct EngineOutput<C> {
     pub data_for_docs: Vec<(SedimentreeId, Vec<Vec<u8>>)>,
     /// Search status updates (sed_id → status).
     pub search_status: Vec<(SedimentreeId, SearchStatus)>,
+    /// Batch sync completion metrics.
+    pub batch_sync_metrics: Vec<BatchSyncMetrics>,
 }
 
 impl<C> Default for EngineOutput<C> {
@@ -139,6 +152,7 @@ impl<C> Default for EngineOutput<C> {
             sign_requests: Vec::new(),
             data_for_docs: Vec::new(),
             search_status: Vec::new(),
+            batch_sync_metrics: Vec::new(),
         }
     }
 }
@@ -672,22 +686,34 @@ impl<C: Eq + Hash + Copy + Debug> SubductionEngine<C> {
             }
         }
 
-        // Extract blob bytes for document delivery
+        // Extract blob bytes for document delivery and count items
         let mut blobs_for_doc = Vec::new();
+        let mut commits_downloaded = 0usize;
+        let mut fragments_downloaded = 0usize;
         for io_task in &step.io_tasks {
             match io_task {
                 BatchSyncIo::PutCommits { commits, .. } => {
+                    commits_downloaded += commits.len();
                     for (_, blob) in commits {
                         blobs_for_doc.push(blob.as_slice().to_vec());
                     }
                 }
                 BatchSyncIo::PutFragments { fragments, .. } => {
+                    fragments_downloaded += fragments.len();
                     for (_, blob) in fragments {
                         blobs_for_doc.push(blob.as_slice().to_vec());
                     }
                 }
                 _ => {}
             }
+        }
+
+        if (commits_downloaded > 0 || fragments_downloaded > 0) && step.complete {
+            out.batch_sync_metrics.push(BatchSyncMetrics {
+                sed_id,
+                commits_downloaded,
+                fragments_downloaded,
+            });
         }
 
         if step.complete && self.finding_docs.contains_key(&sed_id) {

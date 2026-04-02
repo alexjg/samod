@@ -651,3 +651,79 @@ fn multiple_find_calls_same_document() {
         Some("hello".to_string()),
     );
 }
+
+// =========================================================================
+// Sedimentree chunking metrics
+// =========================================================================
+
+/// Verifies that when syncing a document with many changes via subduction,
+/// batch sync metrics report both fragments and commits — demonstrating
+/// that sedimentree chunking is creating fragments from automerge changes.
+#[test]
+fn batch_sync_produces_fragments() {
+    use samod_core::actors::hub::hub_results::SubductionEvent;
+
+    init_logging();
+    let mut network = Network::new();
+
+    let alice = network.create_samod("Alice");
+    let bob = network.create_samod("Bob");
+
+    // Create a document with many changes on Alice.
+    // With ~500 changes, we expect ~2 fragment boundaries
+    // (CountLeadingZeroBytes gives depth > 0 with probability ~1/256).
+    let ids = network.samod(&alice).create_document();
+    let num_changes = 500;
+    for i in 0..num_changes {
+        network
+            .samod(&alice)
+            .with_document_by_actor(ids.actor_id, |doc| {
+                let mut tx = doc.transaction();
+                tx.put(automerge::ROOT, "counter", i as i64).unwrap();
+                tx.commit();
+            })
+            .unwrap();
+    }
+    network.run_until_quiescent();
+
+    // Connect via subduction and have Bob find the document
+    network.connect_subduction(alice, bob);
+    network.run_until_quiescent();
+
+    let _bob_actor = network
+        .samod(&bob)
+        .find_document(&ids.doc_id)
+        .expect("Bob should find the document");
+
+    // Check subduction events on Bob for batch sync metrics
+    let events = network.samod(&bob).subduction_events();
+    let batch_metrics: Vec<_> = events
+        .iter()
+        .filter_map(|e| match e {
+            SubductionEvent::BatchSyncComplete {
+                commits_downloaded,
+                fragments_downloaded,
+                ..
+            } => Some((*commits_downloaded, *fragments_downloaded)),
+        })
+        .collect();
+
+    assert!(
+        !batch_metrics.is_empty(),
+        "Should have at least one batch sync completion event"
+    );
+
+    let total_commits: usize = batch_metrics.iter().map(|(c, _)| *c).sum();
+    let total_fragments: usize = batch_metrics.iter().map(|(_, f)| *f).sum();
+
+    println!(
+        "Total changes: {num_changes}, batch sync received: {total_fragments} fragments + {total_commits} commits"
+    );
+
+    assert!(
+        total_fragments > 0,
+        "Should have downloaded at least one fragment, but got 0. \
+         With {num_changes} changes, ~{} fragment boundaries are expected.",
+        num_changes / 256
+    );
+}
