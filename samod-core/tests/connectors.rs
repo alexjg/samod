@@ -1,7 +1,5 @@
 use std::time::Duration;
 
-#[cfg(feature = "subduction")]
-use samod_core::actors::hub::subduction_sync::SubductionConfig;
 use samod_core::{
     BackoffConfig, CommandResult, DialerConfig, DialerEvent, DialerId, ListenerConfig, ListenerId,
     StorageKey, UnixTimestamp,
@@ -15,13 +13,15 @@ fn make_hub(name: &str) -> Hub {
     use samod_core::{LoaderState, PeerId, SamodLoader};
     use std::collections::HashMap;
 
-    let peer_id = PeerId::from_string(name.to_string());
-    // let mut rng = rand::rngs::StdRng::seed_from_u64(42);
     let mut rng = rand::rng();
     #[cfg(not(feature = "subduction"))]
-    let mut loader = SamodLoader::new(peer_id);
+    let mut loader = SamodLoader::new(PeerId::from_string(name.to_string()));
     #[cfg(feature = "subduction")]
-    let mut loader = SamodLoader::new(peer_id, SubductionConfig::new(&mut rng));
+    let mut loader = {
+        let key_bytes: [u8; 32] = blake3::hash(name.as_bytes()).into();
+        let signing_key = ed25519_dalek::SigningKey::from_bytes(&key_bytes);
+        SamodLoader::new(&signing_key, None)
+    };
     let now = UnixTimestamp::from_millis(1000);
     let mut storage: HashMap<StorageKey, Vec<u8>> = HashMap::new();
 

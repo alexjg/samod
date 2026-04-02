@@ -15,10 +15,7 @@ use crate::{
 ///
 /// ```rust,no_run
 /// use samod_core::{PeerId, SamodLoader, LoaderState, UnixTimestamp, io::{StorageResult, IoResult}};
-#[cfg_attr(
-    feature = "subduction",
-    doc = " use samod_core::actors::hub::subduction_sync::SubductionConfig;"
-)]
+#[cfg_attr(feature = "subduction", doc = " use ed25519_dalek;")]
 /// use rand::SeedableRng;
 ///
 /// let mut rng = rand::rngs::StdRng::from_rng(&mut rand::rng());
@@ -28,7 +25,11 @@ use crate::{
 )]
 #[cfg_attr(
     feature = "subduction",
-    doc = "let mut loader = SamodLoader::new(PeerId::from(\"test\"), SubductionConfig::new(&mut rng));"
+    doc = "let signing_key = ed25519_dalek::SigningKey::from_bytes(&[0u8; 32]);"
+)]
+#[cfg_attr(
+    feature = "subduction",
+    doc = "let mut loader = SamodLoader::new(&signing_key, None);"
 )]
 ///
 /// loop {
@@ -78,22 +79,34 @@ enum State {
 impl SamodLoader {
     /// Creates a new samod loader.
     ///
-    /// # Arguments
-    ///
-    /// * `now` - The current timestamp for initialization
-    ///
-    /// # Returns
-    ///
-    /// A new `SamodLoader` ready to begin the loading process.
-    pub fn new(
-        local_peer_id: PeerId,
-        #[cfg(feature = "subduction")]
-        subduction_config: crate::actors::hub::subduction_sync::SubductionConfig,
-    ) -> Self {
+    /// Without the `subduction` feature, pass a [`PeerId`] directly.
+    /// With the `subduction` feature, pass an [`ed25519_dalek::SigningKey`]
+    /// — the [`PeerId`] will be derived from the verifying key.
+    #[cfg(not(feature = "subduction"))]
+    pub fn new(local_peer_id: PeerId) -> Self {
         Self {
             local_peer_id,
             state: State::Starting,
-            #[cfg(feature = "subduction")]
+        }
+    }
+
+    /// Creates a new samod loader from an Ed25519 signing key.
+    ///
+    /// The [`PeerId`] is derived from the signing key's verifying key,
+    /// ensuring the samod and subduction peer identities match.
+    #[cfg(feature = "subduction")]
+    pub fn new(
+        signing_key: &ed25519_dalek::SigningKey,
+        responder_config: Option<crate::actors::hub::subduction_sync::ResponderConfig>,
+    ) -> Self {
+        let local_peer_id = PeerId::from_verifying_key(&signing_key.verifying_key());
+        let subduction_config = crate::actors::hub::subduction_sync::SubductionConfig {
+            our_verifying_key: signing_key.verifying_key(),
+            responder_config,
+        };
+        Self {
+            local_peer_id,
+            state: State::Starting,
             subduction_config,
         }
     }

@@ -7,9 +7,9 @@
 use std::collections::HashMap;
 
 use sedimentree_core::blob::Blob;
+pub use subduction_sans_io::handshake::ResponderConfig;
 use subduction_sans_io::{
     engine::{EngineConfig, EngineOutput, Input, SearchStatus, SubductionEngine},
-    handshake::ResponderConfig,
     storage::{KvOp, KvResult, StorageKey as SubStorageKey},
     storage_coord::OpId,
     types::{Audience, TimestampSeconds},
@@ -33,17 +33,6 @@ pub struct SubductionConfig {
     pub responder_config: Option<ResponderConfig>,
 }
 
-impl SubductionConfig {
-    pub fn new<R: rand::Rng>(rng: &mut R) -> Self {
-        // Generate a new random verifying key for this Hub instance.
-        let signer_bytes: [u8; 32] = rng.random();
-        let signing = ed25519_dalek::SigningKey::from_bytes(&signer_bytes);
-        Self {
-            our_verifying_key: signing.verifying_key(),
-            responder_config: None,
-        }
-    }
-}
 
 /// Data that should be sent to a DocumentActor after subduction sync.
 #[derive(Debug)]

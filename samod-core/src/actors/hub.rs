@@ -47,15 +47,17 @@ impl Hub {
     /// # Returns
     ///
     /// A `SamodLoader` that will eventually yield a loaded `Samod` instance.
+    #[cfg(not(feature = "subduction"))]
+    pub fn load(peer_id: PeerId) -> SamodLoader {
+        SamodLoader::new(peer_id)
+    }
+
+    #[cfg(feature = "subduction")]
     pub fn load(
-        peer_id: PeerId,
-        #[cfg(feature = "subduction")] subduction_config: subduction_sync::SubductionConfig,
+        signing_key: &ed25519_dalek::SigningKey,
+        responder_config: Option<subduction_sync::ResponderConfig>,
     ) -> SamodLoader {
-        SamodLoader::new(
-            peer_id,
-            #[cfg(feature = "subduction")]
-            subduction_config,
-        )
+        SamodLoader::new(signing_key, responder_config)
     }
 
     /// Processes an event and returns any resulting IO tasks or command completions.

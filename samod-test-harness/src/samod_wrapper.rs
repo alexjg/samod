@@ -57,22 +57,18 @@ impl SamodWrapper {
     }
 
     pub fn new_with_storage(nickname: String, mut storage: Storage) -> Self {
-        let peer_id = PeerId::from_string(nickname.clone());
-
         #[cfg(feature = "subduction")]
         let signing_key = {
             let key_bytes: [u8; 32] = blake3::hash(nickname.as_bytes()).into();
             ed25519_dalek::SigningKey::from_bytes(&key_bytes)
         };
 
+        #[cfg(not(feature = "subduction"))]
         let mut loader = samod_core::SamodLoader::new(
-            peer_id,
-            #[cfg(feature = "subduction")]
-            samod_core::actors::hub::subduction_sync::SubductionConfig {
-                our_verifying_key: signing_key.verifying_key(),
-                responder_config: None,
-            },
+            PeerId::from_string(nickname.clone()),
         );
+        #[cfg(feature = "subduction")]
+        let mut loader = samod_core::SamodLoader::new(&signing_key, None);
         #[allow(unused)]
         let now = UnixTimestamp::now();
 

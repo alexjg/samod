@@ -30,6 +30,15 @@ impl PeerId {
     pub fn into_string(self) -> String {
         self.0
     }
+
+    /// Creates a peer ID from an Ed25519 verifying key.
+    ///
+    /// The verifying key bytes are hex-encoded into a string, ensuring
+    /// the samod peer identity matches the subduction peer identity.
+    #[cfg(feature = "subduction")]
+    pub fn from_verifying_key(key: &ed25519_dalek::VerifyingKey) -> Self {
+        Self(hex::encode(key.as_bytes()))
+    }
 }
 
 impl fmt::Display for PeerId {
