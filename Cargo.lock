@@ -113,6 +113,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "automerge_sedimentree"
+version = "0.7.2"
+dependencies = [
+ "automerge",
+ "sedimentree_core",
+ "thiserror",
+]
+
+[[package]]
 name = "axum"
 version = "0.8.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1847,6 +1856,7 @@ name = "samod-core"
 version = "0.9.0"
 dependencies = [
  "automerge",
+ "automerge_sedimentree",
  "base64 0.21.7",
  "blake3",
  "bs58",

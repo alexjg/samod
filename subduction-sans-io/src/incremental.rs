@@ -318,6 +318,35 @@ impl IncrementalSync {
         step
     }
 
+    /// A local fragment was created. Forward to all subscribers.
+    pub fn on_local_fragment(
+        &mut self,
+        id: SedimentreeId,
+        fragment: Signed<Fragment>,
+        blob: Blob,
+    ) -> IncrementalStep {
+        let mut step = IncrementalStep::default();
+
+        let subscribers: Vec<_> = self.subscriptions.subscribers(&id).copied().collect();
+        for subscriber in subscribers {
+            let counter = self.send_counter.next(subscriber);
+            step.messages.push((
+                subscriber,
+                SyncMessage::Fragment {
+                    id,
+                    fragment: fragment.clone(),
+                    blob: blob.clone(),
+                    sender_heads: RemoteHeads {
+                        counter,
+                        heads: vec![], // fragments don't update heads directly
+                    },
+                },
+            ));
+        }
+
+        step
+    }
+
     /// A HeadsUpdate was received from a peer.
     pub fn on_heads_update(
         &mut self,

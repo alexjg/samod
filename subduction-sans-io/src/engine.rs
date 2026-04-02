@@ -16,6 +16,7 @@ use sedimentree_core::{
         digest::Digest,
         fingerprint::FingerprintSeed,
     },
+    fragment::Fragment,
     id::SedimentreeId,
     loose_commit::LooseCommit,
     sedimentree::Sedimentree,
@@ -81,6 +82,13 @@ pub enum Input<C> {
     NewLocalChanges {
         sed_id: SedimentreeId,
         changes: Vec<LocalChange>,
+    },
+    /// Pre-computed sedimentree data (fragments + loose commits) from the
+    /// document layer. Each item needs to be signed before storage and sync.
+    NewSedimentreeData {
+        sed_id: SedimentreeId,
+        fragments: Vec<(Fragment, Blob)>,
+        loose_commits: Vec<(LooseCommit, Blob)>,
     },
 }
 
@@ -163,6 +171,11 @@ enum PendingSign<C> {
         commit: LooseCommit,
         blob: Blob,
     },
+    FragmentSign {
+        sed_id: SedimentreeId,
+        fragment: Fragment,
+        blob: Blob,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -220,6 +233,9 @@ impl<C: Eq + Hash + Copy + Debug> SubductionEngine<C> {
             }
             Input::NewLocalChanges { sed_id, changes } => {
                 self.handle_new_local_changes(sed_id, changes, &mut out);
+            }
+            Input::NewSedimentreeData { sed_id, fragments, loose_commits } => {
+                self.handle_new_sedimentree_data(sed_id, fragments, loose_commits, &mut out);
             }
         }
         out
@@ -316,6 +332,27 @@ impl<C: Eq + Hash + Copy + Debug> SubductionEngine<C> {
                 // Push to incremental subscribers
                 let step = self.incremental.on_local_commit(
                     sed_id, signed, blob, vec![commit_digest],
+                );
+                self.process_incremental_step(step, out);
+            }
+            PendingSign::FragmentSign { sed_id, fragment, blob } => {
+                let signed = Signed::from_parts(
+                    self.config.our_verifying_key,
+                    signature,
+                    &fragment,
+                );
+
+                // Store (fire-and-forget)
+                for op in storage::fragments_to_kv_ops(&sed_id, &[(signed.clone(), blob.clone())]) {
+                    out.storage_ops.push(IssuedOp {
+                        op_id: OpId::new(),
+                        operation: op,
+                    });
+                }
+
+                // Push to incremental subscribers
+                let step = self.incremental.on_local_fragment(
+                    sed_id, signed, blob,
                 );
                 self.process_incremental_step(step, out);
             }
@@ -440,6 +477,72 @@ impl<C: Eq + Hash + Copy + Debug> SubductionEngine<C> {
             });
             self.pending_signs.insert(sign_op_id, PendingSign::CommitSign {
                 sed_id, commit, blob: change.blob.clone(),
+            });
+        }
+    }
+
+    // ----- Pre-computed sedimentree data -----
+
+    fn handle_new_sedimentree_data(
+        &mut self,
+        sed_id: SedimentreeId,
+        fragments: Vec<(Fragment, Blob)>,
+        loose_commits: Vec<(LooseCommit, Blob)>,
+        out: &mut EngineOutput<C>,
+    ) {
+        use sedimentree_core::codec::{encode::EncodeFields, schema::Schema};
+
+        for (fragment, blob) in fragments {
+            // Store blob (fire-and-forget)
+            let blob_digest = blob.meta().digest();
+            out.storage_ops.push(IssuedOp {
+                op_id: OpId::new(),
+                operation: KvOp::Put {
+                    key: storage::sedimentree_blob_path(&sed_id, &blob_digest),
+                    value: blob.as_slice().to_vec(),
+                },
+            });
+
+            // Request signing
+            let mut payload_bytes = Vec::new();
+            payload_bytes.extend_from_slice(&Fragment::SCHEMA);
+            payload_bytes.extend_from_slice(self.config.our_verifying_key.as_bytes());
+            fragment.encode_fields(&mut payload_bytes);
+
+            let sign_op_id = OpId::new();
+            out.sign_requests.push(SignRequest {
+                op_id: sign_op_id,
+                payload_bytes,
+            });
+            self.pending_signs.insert(sign_op_id, PendingSign::FragmentSign {
+                sed_id, fragment, blob,
+            });
+        }
+
+        for (commit, blob) in loose_commits {
+            // Store blob (fire-and-forget)
+            let blob_digest = blob.meta().digest();
+            out.storage_ops.push(IssuedOp {
+                op_id: OpId::new(),
+                operation: KvOp::Put {
+                    key: storage::sedimentree_blob_path(&sed_id, &blob_digest),
+                    value: blob.as_slice().to_vec(),
+                },
+            });
+
+            // Request signing
+            let mut payload_bytes = Vec::new();
+            payload_bytes.extend_from_slice(&LooseCommit::SCHEMA);
+            payload_bytes.extend_from_slice(self.config.our_verifying_key.as_bytes());
+            commit.encode_fields(&mut payload_bytes);
+
+            let sign_op_id = OpId::new();
+            out.sign_requests.push(SignRequest {
+                op_id: sign_op_id,
+                payload_bytes,
+            });
+            self.pending_signs.insert(sign_op_id, PendingSign::CommitSign {
+                sed_id, commit, blob,
             });
         }
     }

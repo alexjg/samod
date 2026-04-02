@@ -6,9 +6,9 @@
 
 use std::collections::HashMap;
 
-use sedimentree_core::{blob::Blob, crypto::digest::Digest, loose_commit::LooseCommit};
+use sedimentree_core::blob::Blob;
 use subduction_sans_io::{
-    engine::{EngineConfig, EngineOutput, Input, LocalChange, SearchStatus, SubductionEngine},
+    engine::{EngineConfig, EngineOutput, Input, SearchStatus, SubductionEngine},
     handshake::ResponderConfig,
     storage::{KvOp, KvResult, StorageKey as SubStorageKey},
     storage_coord::OpId,
@@ -156,23 +156,18 @@ impl SubductionSync {
         self.process_output(output, out);
     }
 
-    pub(crate) fn on_new_changes_from_doc(
+    pub(crate) fn on_new_sedimentree_data(
         &mut self,
         document_id: &DocumentId,
-        changes: Vec<crate::actors::messages::SubductionChangeInfo>,
+        fragments: Vec<(sedimentree_core::fragment::Fragment, Blob)>,
+        loose_commits: Vec<(sedimentree_core::loose_commit::LooseCommit, Blob)>,
         out: &mut HubResults,
     ) {
         let sed_id = document_id.to_sedimentree_id();
-        let local_changes: Vec<LocalChange> = changes
-            .iter()
-            .map(|c| LocalChange {
-                parents: c.deps.iter().map(change_hash_to_digest).collect(),
-                blob: Blob::new(c.raw_bytes.clone()),
-            })
-            .collect();
-        let output = self.engine.handle(Input::NewLocalChanges {
+        let output = self.engine.handle(Input::NewSedimentreeData {
             sed_id,
-            changes: local_changes,
+            fragments,
+            loose_commits,
         });
         self.process_output(output, out);
     }
@@ -268,13 +263,4 @@ fn storage_result_to_kv(result: StorageResult) -> KvResult {
         StorageResult::Load { value } => KvResult::Load { value },
         StorageResult::Put | StorageResult::Delete => KvResult::Put,
     }
-}
-
-fn change_hash_to_digest(hash: &automerge::ChangeHash) -> Digest<LooseCommit> {
-    let hash_str = hash.to_string();
-    let bytes: [u8; 32] = hex::decode(&hash_str)
-        .ok()
-        .and_then(|v| v.try_into().ok())
-        .unwrap_or([0u8; 32]);
-    Digest::force_from_bytes(bytes)
 }

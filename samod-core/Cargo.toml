@@ -22,6 +22,7 @@ bs58 = { version = "0.5.1", features = ["check"] }
 sha2 = "0.10.9"
 subduction-sans-io = { path = "../subduction-sans-io", optional = true }
 sedimentree_core = { path = "../../subduction/sedimentree_core", default-features = false, optional = true }
+automerge_sedimentree = { path = "../../subduction/automerge_sedimentree", optional = true }
 blake3 = { version = "1.8", optional = true }
 subduction_crypto = { path = "../../subduction/subduction_crypto", default-features = false, optional = true }
 ed25519-dalek = { version = "2.1", optional = true }
@@ -32,6 +33,7 @@ subduction = [
     "dep:subduction-sans-io",
     "dep:subduction_crypto",
     "dep:sedimentree_core",
+    "dep:automerge_sedimentree",
     "dep:blake3",
     "dep:ed25519-dalek",
     "samod-test-harness/subduction",

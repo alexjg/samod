@@ -498,12 +498,17 @@ impl State {
                             self.actors.remove(&actor_id);
                         }
                         #[cfg(feature = "subduction")]
-                        DocToHubMsgPayload::NewChangesForSubduction {
+                        DocToHubMsgPayload::NewSedimentreeData {
                             document_id,
-                            changes,
+                            fragments,
+                            loose_commits,
                         } => {
-                            self.subduction
-                                .on_new_changes_from_doc(&document_id, changes, results);
+                            self.subduction.on_new_sedimentree_data(
+                                &document_id,
+                                fragments,
+                                loose_commits,
+                                results,
+                            );
                         }
                     },
                     HubInput::ConnectionLost { connection_id } => {

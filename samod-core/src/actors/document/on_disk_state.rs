@@ -8,6 +8,9 @@ use crate::{
     io::{IoTaskId, StorageResult},
 };
 
+#[cfg(feature = "subduction")]
+use sedimentree_core::crypto::digest::Digest;
+
 mod compaction_hash;
 pub use compaction_hash::CompactionHash;
 
@@ -19,6 +22,11 @@ pub(super) struct OnDiskState {
     deletions: HashSet<StorageKey>,
     running_puts: HashMap<IoTaskId, StorageKey>,
     running_deletes: HashMap<IoTaskId, StorageKey>,
+    /// Digests of fragments and loose commits already sent to subduction.
+    #[cfg(feature = "subduction")]
+    sent_fragment_digests: HashSet<Digest<sedimentree_core::fragment::Fragment>>,
+    #[cfg(feature = "subduction")]
+    sent_commit_digests: HashSet<Digest<sedimentree_core::loose_commit::LooseCommit>>,
 }
 
 #[derive(Debug)]
@@ -36,6 +44,10 @@ impl OnDiskState {
             deletions: HashSet::new(),
             running_deletes: HashMap::new(),
             running_puts: HashMap::new(),
+            #[cfg(feature = "subduction")]
+            sent_fragment_digests: HashSet::new(),
+            #[cfg(feature = "subduction")]
+            sent_commit_digests: HashSet::new(),
         }
     }
 
@@ -51,17 +63,6 @@ impl OnDiskState {
         doc: &Automerge,
     ) {
         let new_changes = doc.get_changes(self.last_saved_heads.as_ref().unwrap_or(&Vec::new()));
-
-        // Collect structured change info for subduction before the save logic consumes new_changes.
-        #[cfg(feature = "subduction")]
-        let subduction_changes: Vec<crate::actors::messages::SubductionChangeInfo> = new_changes
-            .iter()
-            .map(|c| crate::actors::messages::SubductionChangeInfo {
-                hash: c.hash(),
-                deps: c.deps().to_vec(),
-                raw_bytes: c.raw_bytes().to_vec(),
-            })
-            .collect();
 
         let eligible_for_compaction = new_changes.len() > 10 || self.on_disk.len() > 10;
         if self.compaction.is_none() && eligible_for_compaction {
@@ -97,16 +98,9 @@ impl OnDiskState {
             self.running_deletes.insert(delete_id, deletion);
         }
 
-        // Notify the Hub of new changes for subduction propagation.
+        // Run sedimentree ingest and send new fragments/commits to the hub.
         #[cfg(feature = "subduction")]
-        if !subduction_changes.is_empty() {
-            out.outgoing_messages.push(crate::actors::messages::DocToHubMsg(
-                crate::actors::messages::DocToHubMsgPayload::NewChangesForSubduction {
-                    document_id: doc_id.clone(),
-                    changes: subduction_changes,
-                },
-            ));
-        }
+        self.send_sedimentree_data(out, doc_id, doc);
 
         self.last_saved_heads = Some(doc.get_heads());
     }
@@ -162,5 +156,67 @@ impl OnDiskState {
         // Probably this has already been removed in the handling of the compaction completion, but
         // we might as well be robust
         self.on_disk.remove(&key);
+    }
+
+    #[cfg(feature = "subduction")]
+    fn send_sedimentree_data(
+        &mut self,
+        out: &mut DocActorResult,
+        doc_id: &DocumentId,
+        doc: &Automerge,
+    ) {
+        let sed_id = doc_id.to_sedimentree_id();
+        let ingest_result = match automerge_sedimentree::ingest::ingest_automerge(doc, sed_id) {
+            Ok(result) => result,
+            Err(e) => {
+                tracing::warn!(err=?e, "sedimentree ingest failed");
+                return;
+            }
+        };
+
+        // Diff against previously-sent state: only send new items.
+        let mut new_fragments = Vec::new();
+        let mut new_loose_commits = Vec::new();
+
+        use sedimentree_core::blob::has_meta::HasBlobMeta;
+
+        for (fragment_digest, fragment) in ingest_result.sedimentree.fragment_entries() {
+            if self.sent_fragment_digests.insert(*fragment_digest) {
+                if let Some(blob) = ingest_result
+                    .blobs
+                    .iter()
+                    .find(|b| b.meta().digest() == fragment.blob_meta().digest())
+                {
+                    new_fragments.push((fragment.clone(), blob.clone()));
+                }
+            }
+        }
+
+        for (commit_digest, commit) in ingest_result.sedimentree.commit_entries() {
+            if self.sent_commit_digests.insert(*commit_digest) {
+                if let Some(blob) = ingest_result
+                    .blobs
+                    .iter()
+                    .find(|b| b.meta().digest() == commit.blob_meta().digest())
+                {
+                    new_loose_commits.push((commit.clone(), blob.clone()));
+                }
+            }
+        }
+
+        if !new_fragments.is_empty() || !new_loose_commits.is_empty() {
+            tracing::debug!(
+                fragments = new_fragments.len(),
+                loose_commits = new_loose_commits.len(),
+                "sending sedimentree data to hub"
+            );
+            out.outgoing_messages.push(crate::actors::messages::DocToHubMsg(
+                crate::actors::messages::DocToHubMsgPayload::NewSedimentreeData {
+                    document_id: doc_id.clone(),
+                    fragments: new_fragments,
+                    loose_commits: new_loose_commits,
+                },
+            ));
+        }
     }
 }

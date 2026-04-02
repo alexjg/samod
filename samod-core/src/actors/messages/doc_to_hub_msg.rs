@@ -34,27 +34,19 @@ pub(crate) enum DocToHubMsgPayload {
 
     Terminated,
 
-    /// New local changes that need to be propagated via subduction.
-    ///
-    /// Contains structured change information so the Hub can build sedimentree
-    /// commits and blobs, sign them, and push to subscribed subduction peers.
+    /// Pre-computed sedimentree data (fragments + loose commits) to propagate
+    /// via subduction. The Hub forwards these to the engine for signing and sync.
     #[cfg(feature = "subduction")]
-    NewChangesForSubduction {
+    NewSedimentreeData {
         document_id: DocumentId,
-        changes: Vec<SubductionChangeInfo>,
+        /// New fragments not previously sent.
+        fragments: Vec<(sedimentree_core::fragment::Fragment, sedimentree_core::blob::Blob)>,
+        /// New loose commits not previously sent.
+        loose_commits: Vec<(
+            sedimentree_core::loose_commit::LooseCommit,
+            sedimentree_core::blob::Blob,
+        )>,
     },
-}
-
-/// Information about a single automerge change for subduction propagation.
-#[cfg(feature = "subduction")]
-#[derive(Debug, Clone)]
-pub struct SubductionChangeInfo {
-    /// The hash of this change (becomes the commit digest in sedimentree).
-    pub hash: automerge::ChangeHash,
-    /// Parent change hashes (becomes the parents in LooseCommit).
-    pub deps: Vec<automerge::ChangeHash>,
-    /// Raw change bytes (becomes the blob in sedimentree).
-    pub raw_bytes: Vec<u8>,
 }
 
 #[derive(Debug, Clone)]
