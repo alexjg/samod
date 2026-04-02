@@ -25,11 +25,11 @@ use crate::{
 )]
 #[cfg_attr(
     feature = "subduction",
-    doc = "let signing_key = ed25519_dalek::SigningKey::from_bytes(&[0u8; 32]);"
+    doc = "let verifying_key = ed25519_dalek::SigningKey::from_bytes(&[0u8; 32]).verifying_key();"
 )]
 #[cfg_attr(
     feature = "subduction",
-    doc = "let mut loader = SamodLoader::new(&signing_key, None);"
+    doc = "let mut loader = SamodLoader::new(&verifying_key, None);"
 )]
 ///
 /// loop {
@@ -80,8 +80,8 @@ impl SamodLoader {
     /// Creates a new samod loader.
     ///
     /// Without the `subduction` feature, pass a [`PeerId`] directly.
-    /// With the `subduction` feature, pass an [`ed25519_dalek::SigningKey`]
-    /// — the [`PeerId`] will be derived from the verifying key.
+    /// With the `subduction` feature, pass an [`ed25519_dalek::VerifyingKey`]
+    /// — the [`PeerId`] will be derived from it.
     #[cfg(not(feature = "subduction"))]
     pub fn new(local_peer_id: PeerId) -> Self {
         Self {
@@ -90,18 +90,20 @@ impl SamodLoader {
         }
     }
 
-    /// Creates a new samod loader from an Ed25519 signing key.
+    /// Creates a new samod loader from an Ed25519 verifying key.
     ///
-    /// The [`PeerId`] is derived from the signing key's verifying key,
-    /// ensuring the samod and subduction peer identities match.
+    /// The [`PeerId`] is derived from the verifying key, ensuring the samod
+    /// and subduction peer identities match. The corresponding signing key
+    /// is held by the runtime layer (not samod-core) — the hub only needs
+    /// the verifying key to construct signature payloads.
     #[cfg(feature = "subduction")]
     pub fn new(
-        signing_key: &ed25519_dalek::SigningKey,
+        verifying_key: &ed25519_dalek::VerifyingKey,
         responder_config: Option<crate::actors::hub::subduction_sync::ResponderConfig>,
     ) -> Self {
-        let local_peer_id = PeerId::from_verifying_key(&signing_key.verifying_key());
+        let local_peer_id = PeerId::from_verifying_key(verifying_key);
         let subduction_config = crate::actors::hub::subduction_sync::SubductionConfig {
-            our_verifying_key: signing_key.verifying_key(),
+            our_verifying_key: *verifying_key,
             responder_config,
         };
         Self {

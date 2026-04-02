@@ -54,10 +54,10 @@ impl Hub {
 
     #[cfg(feature = "subduction")]
     pub fn load(
-        signing_key: &ed25519_dalek::SigningKey,
+        verifying_key: &ed25519_dalek::VerifyingKey,
         responder_config: Option<subduction_sync::ResponderConfig>,
     ) -> SamodLoader {
-        SamodLoader::new(signing_key, responder_config)
+        SamodLoader::new(verifying_key, responder_config)
     }
 
     /// Processes an event and returns any resulting IO tasks or command completions.

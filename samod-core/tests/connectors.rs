@@ -20,7 +20,7 @@ fn make_hub(name: &str) -> Hub {
     let mut loader = {
         let key_bytes: [u8; 32] = blake3::hash(name.as_bytes()).into();
         let signing_key = ed25519_dalek::SigningKey::from_bytes(&key_bytes);
-        SamodLoader::new(&signing_key, None)
+        SamodLoader::new(&signing_key.verifying_key(), None)
     };
     let now = UnixTimestamp::from_millis(1000);
     let mut storage: HashMap<StorageKey, Vec<u8>> = HashMap::new();

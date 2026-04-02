@@ -43,6 +43,8 @@ pub struct RepoBuilder<S, R, A> {
     pub(crate) peer_id: Option<PeerId>,
     pub(crate) concurrency: ConcurrencyConfig,
     pub(crate) observer: Option<Arc<dyn RepoObserver>>,
+    #[cfg(feature = "subduction")]
+    pub(crate) signer: Option<crate::signer::MemorySigner>,
 }
 
 impl<S, R, A> RepoBuilder<S, R, A> {
@@ -54,6 +56,8 @@ impl<S, R, A> RepoBuilder<S, R, A> {
             announce_policy: self.announce_policy,
             concurrency: self.concurrency,
             observer: self.observer,
+            #[cfg(feature = "subduction")]
+            signer: self.signer,
         }
     }
 
@@ -65,6 +69,8 @@ impl<S, R, A> RepoBuilder<S, R, A> {
             announce_policy: self.announce_policy,
             concurrency: self.concurrency,
             observer: self.observer,
+            #[cfg(feature = "subduction")]
+            signer: self.signer,
         }
     }
 
@@ -81,6 +87,8 @@ impl<S, R, A> RepoBuilder<S, R, A> {
             announce_policy,
             concurrency: self.concurrency,
             observer: self.observer,
+            #[cfg(feature = "subduction")]
+            signer: self.signer,
         }
     }
 
@@ -98,6 +106,21 @@ impl<S, R, A> RepoBuilder<S, R, A> {
         self.observer = Some(Arc::new(observer));
         self
     }
+
+    /// Set the signer for subduction protocol signing operations.
+    #[cfg(feature = "subduction")]
+    pub fn with_signer(mut self, signer: crate::signer::MemorySigner) -> Self {
+        self.signer = Some(signer);
+        self
+    }
+
+    /// Extract the signer as an `OptionalSigner` for the IO loop.
+    pub(crate) fn signer(&self) -> crate::io_loop::OptionalSigner {
+        #[cfg(feature = "subduction")]
+        { self.signer.clone() }
+        #[cfg(not(feature = "subduction"))]
+        { () }
+    }
 }
 
 impl<R> RepoBuilder<InMemoryStorage, R, AlwaysAnnounce> {
@@ -109,6 +132,8 @@ impl<R> RepoBuilder<InMemoryStorage, R, AlwaysAnnounce> {
             announce_policy: AlwaysAnnounce,
             concurrency: ConcurrencyConfig::AsyncRuntime,
             observer: None,
+            #[cfg(feature = "subduction")]
+            signer: None,
         }
     }
 }

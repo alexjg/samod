@@ -68,7 +68,7 @@ impl SamodWrapper {
             PeerId::from_string(nickname.clone()),
         );
         #[cfg(feature = "subduction")]
-        let mut loader = samod_core::SamodLoader::new(&signing_key, None);
+        let mut loader = samod_core::SamodLoader::new(&signing_key.verifying_key(), None);
         #[allow(unused)]
         let now = UnixTimestamp::now();
 

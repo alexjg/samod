@@ -33,6 +33,17 @@ pub(crate) enum IoLoopTask {
         task: IoTask<DocumentIoTask>,
         actor_id: DocumentActorId,
     },
+    /// Hub-level storage (e.g. sedimentree KV for subduction).
+    HubStorage {
+        task_id: samod_core::io::IoTaskId,
+        storage_task: StorageTask,
+    },
+    /// Hub-level signing (subduction Ed25519 signatures).
+    #[cfg(feature = "subduction")]
+    HubSign {
+        task_id: samod_core::io::IoTaskId,
+        payload_bytes: Vec<u8>,
+    },
     EstablishTransport {
         dialer_id: DialerId,
         url: Url,
@@ -61,8 +72,18 @@ struct StorageTaskComplete {
     actor_id: DocumentActorId,
 }
 
+struct HubIoTaskComplete {
+    task_id: samod_core::io::IoTaskId,
+    result: samod_core::actors::hub::io::HubIoResult,
+}
+
 /// Type alias for a shared, type-erased dialer.
 pub(crate) type DynDialer = Arc<dyn crate::Dialer>;
+
+#[cfg(feature = "subduction")]
+pub(crate) type OptionalSigner = Option<crate::signer::MemorySigner>;
+#[cfg(not(feature = "subduction"))]
+pub(crate) type OptionalSigner = ();
 
 #[tracing::instrument(skip(inner, storage, announce_policy, rx, dialers, observer))]
 pub(crate) async fn io_loop<S: LocalStorage, A: LocalAnnouncePolicy>(
@@ -73,8 +94,11 @@ pub(crate) async fn io_loop<S: LocalStorage, A: LocalAnnouncePolicy>(
     rx: UnboundedReceiver<IoLoopTask>,
     dialers: Arc<Mutex<std::collections::HashMap<DialerId, DynDialer>>>,
     observer: Option<Arc<dyn RepoObserver>>,
+    signer: OptionalSigner,
 ) {
     let mut running_storage_tasks = FuturesUnordered::new();
+    let mut running_hub_storage_tasks = FuturesUnordered::new();
+    let mut running_hub_sign_tasks: FuturesUnordered<std::pin::Pin<Box<dyn std::future::Future<Output = HubIoTaskComplete> + Send>>> = FuturesUnordered::new();
     let mut running_connections = FuturesUnordered::new();
     let mut running_transport_establishments = FuturesUnordered::new();
 
@@ -129,6 +153,29 @@ pub(crate) async fn io_loop<S: LocalStorage, A: LocalAnnouncePolicy>(
                             inner.lock().unwrap().handle_event(event);
                         }
                     }
+                    IoLoopTask::HubStorage { task_id, storage_task } => {
+                        let storage = storage.clone();
+                        running_hub_storage_tasks.push(async move {
+                            let result = dispatch_hub_storage_task(storage, storage_task).await;
+                            HubIoTaskComplete { task_id, result }
+                        });
+                    }
+                    #[cfg(feature = "subduction")]
+                    IoLoopTask::HubSign { task_id, payload_bytes } => {
+                        if let Some(ref signer) = signer {
+                            use crate::signer::LocalSigner as _;
+                            let signer = signer.clone();
+                            running_hub_sign_tasks.push(Box::pin(async move {
+                                let signature = signer.sign(payload_bytes).await;
+                                HubIoTaskComplete {
+                                    task_id,
+                                    result: samod_core::actors::hub::io::HubIoResult::Sign { signature },
+                                }
+                            }));
+                        } else {
+                            tracing::warn!("Sign task received but no signer configured");
+                        }
+                    }
                     IoLoopTask::Tick => {
                         inner.lock().unwrap().handle_event(HubEvent::tick());
                     }
@@ -138,6 +185,22 @@ pub(crate) async fn io_loop<S: LocalStorage, A: LocalAnnouncePolicy>(
                 let StorageTaskComplete { actor_id, result } = result;
                 let inner = inner.lock().unwrap();
                 inner.dispatch_task(actor_id, ActorTask::IoComplete(result));
+            },
+            result = running_hub_storage_tasks.select_next_some() => {
+                let HubIoTaskComplete { task_id, result } = result;
+                let event = HubEvent::io_complete(IoResult {
+                    task_id,
+                    payload: result,
+                });
+                inner.lock().unwrap().handle_event(event);
+            },
+            result = running_hub_sign_tasks.select_next_some() => {
+                let HubIoTaskComplete { task_id, result } = result;
+                let event = HubEvent::io_complete(IoResult {
+                    task_id,
+                    payload: result,
+                });
+                inner.lock().unwrap().handle_event(event);
             },
             _ = running_connections.select_next_some() => {
 
@@ -219,6 +282,14 @@ pub(crate) async fn dispatch_storage_task<S: LocalStorage>(
             StorageResult::Delete
         }
     }
+}
+
+async fn dispatch_hub_storage_task<S: LocalStorage>(
+    storage: S,
+    task: StorageTask,
+) -> samod_core::actors::hub::io::HubIoResult {
+    let storage_result = dispatch_storage_task(task, storage).await;
+    samod_core::actors::hub::io::HubIoResult::Storage(storage_result)
 }
 
 async fn drive_connection(

@@ -1830,6 +1830,7 @@ dependencies = [
  "axum",
  "bytes",
  "chrono",
+ "ed25519-dalek",
  "eyre",
  "futures",
  "futures-timer",

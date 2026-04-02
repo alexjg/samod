@@ -343,6 +343,8 @@ pub use peer_info::PeerInfo;
 mod stopped;
 pub use stopped::Stopped;
 pub mod storage;
+#[cfg(feature = "subduction")]
+pub mod signer;
 pub mod transport;
 pub use crate::announce_policy::{
     AlwaysAnnounce, AnnouncePolicy, LocalAnnouncePolicy, NeverAnnounce,
@@ -448,17 +450,22 @@ impl Repo {
     >(
         builder: RepoBuilder<S, R, A>,
     ) -> Self {
-        let RepoBuilder {
-            storage,
-            runtime,
-            peer_id,
-            announce_policy,
-            concurrency,
-            observer,
-        } = builder;
-        let task_setup = TaskSetup::new(storage.clone(), peer_id, concurrency, observer).await;
+        let signer = builder.signer();
+        let task_setup = TaskSetup::new(
+            builder.storage.clone(),
+            builder.peer_id,
+            builder.concurrency,
+            builder.observer,
+            &signer,
+        )
+        .await;
         let inner = task_setup.inner.clone();
-        task_setup.spawn_tasks(runtime, storage, announce_policy);
+        task_setup.spawn_tasks(
+            builder.runtime,
+            builder.storage,
+            builder.announce_policy,
+            signer,
+        );
         Self { inner }
     }
 
@@ -470,17 +477,22 @@ impl Repo {
     >(
         builder: RepoBuilder<S, R, A>,
     ) -> Self {
-        let RepoBuilder {
-            storage,
-            runtime,
-            peer_id,
-            announce_policy,
-            concurrency,
-            observer,
-        } = builder;
-        let task_setup = TaskSetup::new(storage.clone(), peer_id, concurrency, observer).await;
+        let signer = builder.signer();
+        let task_setup = TaskSetup::new(
+            builder.storage.clone(),
+            builder.peer_id,
+            builder.concurrency,
+            builder.observer,
+            &signer,
+        )
+        .await;
         let inner = task_setup.inner.clone();
-        task_setup.spawn_tasks_local(runtime, storage, announce_policy);
+        task_setup.spawn_tasks_local(
+            builder.runtime,
+            builder.storage,
+            builder.announce_policy,
+            signer,
+        );
         Self { inner }
     }
 
@@ -848,6 +860,8 @@ struct Inner {
     dialer_handles: HashMap<DialerId, DialerHandle>,
     acceptor_handles: HashMap<ListenerId, AcceptorHandle>,
     observer: Option<Arc<dyn observer::RepoObserver>>,
+    #[cfg(feature = "subduction")]
+    signer: Option<signer::MemorySigner>,
 }
 
 impl Inner {
@@ -886,8 +900,6 @@ impl Inner {
 
     #[tracing::instrument(skip(self, event), fields(local_peer_id=%self.hub.peer_id()))]
     fn handle_event(&mut self, event: HubEvent) {
-        // The hub itself will gracefully ignore events after it has stopped,
-        // but we short-circuit here to avoid unnecessary work.
         if self.hub.is_stopped() {
             tracing::trace!("ignoring event on stopped hub");
             return;
@@ -949,10 +961,18 @@ impl Inner {
                         );
                     }
                 }
-                HubIoAction::Storage(_storage_task) => {
-                    // TODO: execute storage task against the storage backend
-                    // and feed result back via HubEvent::io_complete
-                    tracing::warn!("Hub storage IO not yet implemented in samod runtime");
+                HubIoAction::Storage(storage_task) => {
+                    self.tx_io.unbounded_send(IoLoopTask::HubStorage {
+                        task_id: task.task_id,
+                        storage_task,
+                    });
+                }
+                #[cfg(feature = "subduction")]
+                HubIoAction::Sign { payload_bytes } => {
+                    self.tx_io.unbounded_send(io_loop::IoLoopTask::HubSign {
+                        task_id: task.task_id,
+                        payload_bytes,
+                    });
                 }
             }
         }
@@ -1254,10 +1274,30 @@ impl TaskSetup {
         peer_id: Option<PeerId>,
         concurrency: ConcurrencyConfig,
         observer: Option<Arc<dyn observer::RepoObserver>>,
+        signer: &io_loop::OptionalSigner,
     ) -> TaskSetup {
         let mut rng = rand::rngs::StdRng::from_rng(&mut rand::rng());
-        let peer_id = peer_id.unwrap_or_else(|| PeerId::new_with_rng(&mut rng));
-        let hub = load_hub(storage.clone(), Hub::load(peer_id.clone())).await;
+
+        #[cfg(feature = "subduction")]
+        let loader = if let Some(signer) = signer {
+            use crate::signer::Signer as _;
+            Hub::load(&signer.verifying_key(), None)
+        } else {
+            // No signer provided — generate a temporary verifying key to bootstrap.
+            let signer_bytes: [u8; 32] = rand::Rng::random(&mut rng);
+            let signing_key = ed25519_dalek::SigningKey::from_bytes(&signer_bytes);
+            Hub::load(&signing_key.verifying_key(), None)
+        };
+
+        #[cfg(not(feature = "subduction"))]
+        let loader = {
+            let _ = signer; // suppress unused warning
+            let peer_id = peer_id.unwrap_or_else(|| PeerId::new_with_rng(&mut rng));
+            Hub::load(peer_id.clone())
+        };
+
+        let hub = load_hub(storage.clone(), loader).await;
+        let peer_id = hub.peer_id();
 
         let (tx_storage, rx_storage) = unbounded::channel();
         let tx_io_for_tick = tx_storage.clone();
@@ -1296,6 +1336,9 @@ impl TaskSetup {
             dialer_handles: HashMap::new(),
             acceptor_handles: HashMap::new(),
             observer: observer.clone(),
+            #[cfg(feature = "subduction")]
+            #[cfg(feature = "subduction")]
+            signer: signer.clone(),
         }));
 
         TaskSetup {
@@ -1318,6 +1361,7 @@ impl TaskSetup {
         runtime: R,
         storage: S,
         announce_policy: A,
+        signer: io_loop::OptionalSigner,
     ) {
         runtime.spawn(
             io_loop::io_loop(
@@ -1328,6 +1372,7 @@ impl TaskSetup {
                 self.rx_storage,
                 self.dialers.clone(),
                 self.observer.clone(),
+                signer,
             )
             .boxed_local(),
         );
@@ -1360,6 +1405,7 @@ impl TaskSetup {
         runtime: R,
         storage: S,
         announce_policy: A,
+        signer: io_loop::OptionalSigner,
     ) {
         runtime.spawn(
             io_loop::io_loop(
@@ -1370,6 +1416,7 @@ impl TaskSetup {
                 self.rx_storage,
                 self.dialers.clone(),
                 self.observer.clone(),
+                signer,
             )
             .boxed(),
         );
