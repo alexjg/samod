@@ -25,6 +25,8 @@ use super::running_doc_ids::RunningDocIds;
 
 // A wrapper which manages a hub and document actors, as well as simlated storage and networking state
 pub struct SamodWrapper {
+    // Human-readable name for this peer (used in tracing spans)
+    nickname: String,
     // The hub actor we are testing
     hub: samod_core::actors::hub::Hub,
     // The simulated storage for this instance
@@ -96,6 +98,7 @@ impl SamodWrapper {
         };
 
         SamodWrapper {
+            nickname,
             hub: *hub,
             storage,
             inbox: VecDeque::new(),
@@ -353,6 +356,7 @@ impl SamodWrapper {
     }
 
     pub fn handle_events(&mut self) {
+        let _span = tracing::info_span!("peer", name = %self.nickname).entered();
         for (actor_id, runner) in &mut self.document_actors {
             runner.handle_events(self.now, &mut self.storage, &self.announce_policy);
             self.inbox.extend(

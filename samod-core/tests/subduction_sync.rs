@@ -670,10 +670,11 @@ fn batch_sync_produces_fragments() {
     let bob = network.create_samod("Bob");
 
     // Create a document with many changes on Alice.
-    // With ~500 changes, we expect ~2 fragment boundaries
+    // With ~1000 changes, we expect ~4 fragment boundaries
     // (CountLeadingZeroBytes gives depth > 0 with probability ~1/256).
+    // Using 1000 to avoid flakiness from probabilistic boundary detection.
     let ids = network.samod(&alice).create_document();
-    let num_changes = 500;
+    let num_changes = 1000;
     for i in 0..num_changes {
         network
             .samod(&alice)
