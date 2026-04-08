@@ -114,7 +114,7 @@ dependencies = [
 
 [[package]]
 name = "automerge_sedimentree"
-version = "0.7.2"
+version = "0.7.1"
 dependencies = [
  "automerge",
  "sedimentree_core",
@@ -1927,7 +1927,7 @@ dependencies = [
 
 [[package]]
 name = "sedimentree_core"
-version = "0.8.0"
+version = "0.7.1"
 dependencies = [
  "arbitrary",
  "async-lock",
@@ -2172,7 +2172,7 @@ dependencies = [
 
 [[package]]
 name = "subduction_crypto"
-version = "0.4.0"
+version = "0.3.1"
 dependencies = [
  "arbitrary",
  "ed25519-dalek",

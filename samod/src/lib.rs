@@ -342,9 +342,11 @@ pub use peer_connection_info::{ConnectionInfo, ConnectionState, PeerDocState};
 pub use peer_info::PeerInfo;
 mod stopped;
 pub use stopped::Stopped;
-pub mod storage;
 #[cfg(feature = "subduction")]
 pub mod signer;
+#[cfg(not(feature = "subduction"))]
+pub(crate) mod signer;
+pub mod storage;
 pub mod transport;
 pub use crate::announce_policy::{
     AlwaysAnnounce, AnnouncePolicy, LocalAnnouncePolicy, NeverAnnounce,
@@ -860,7 +862,6 @@ struct Inner {
     dialer_handles: HashMap<DialerId, DialerHandle>,
     acceptor_handles: HashMap<ListenerId, AcceptorHandle>,
     observer: Option<Arc<dyn observer::RepoObserver>>,
-    #[cfg(feature = "subduction")]
     signer: Option<signer::MemorySigner>,
 }
 
@@ -962,17 +963,29 @@ impl Inner {
                     }
                 }
                 HubIoAction::Storage(storage_task) => {
-                    self.tx_io.unbounded_send(IoLoopTask::HubStorage {
-                        task_id: task.task_id,
-                        storage_task,
-                    });
+                    if self
+                        .tx_io
+                        .unbounded_send(IoLoopTask::HubStorage {
+                            task_id: task.task_id,
+                            storage_task,
+                        })
+                        .is_err()
+                    {
+                        tracing::error!("IO loop channel closed, cannot dispatch storage task");
+                    };
                 }
                 #[cfg(feature = "subduction")]
                 HubIoAction::Sign { payload_bytes } => {
-                    self.tx_io.unbounded_send(io_loop::IoLoopTask::HubSign {
-                        task_id: task.task_id,
-                        payload_bytes,
-                    });
+                    if self
+                        .tx_io
+                        .unbounded_send(io_loop::IoLoopTask::HubSign {
+                            task_id: task.task_id,
+                            payload_bytes,
+                        })
+                        .is_err()
+                    {
+                        tracing::error!("IO loop channel closed, cannot dispatch sign task");
+                    }
                 }
             }
         }
@@ -1274,7 +1287,7 @@ impl TaskSetup {
         peer_id: Option<PeerId>,
         concurrency: ConcurrencyConfig,
         observer: Option<Arc<dyn observer::RepoObserver>>,
-        signer: &io_loop::OptionalSigner,
+        signer: &Option<signer::MemorySigner>,
     ) -> TaskSetup {
         let mut rng = rand::rngs::StdRng::from_rng(&mut rand::rng());
 
@@ -1291,7 +1304,6 @@ impl TaskSetup {
 
         #[cfg(not(feature = "subduction"))]
         let loader = {
-            let _ = signer; // suppress unused warning
             let peer_id = peer_id.unwrap_or_else(|| PeerId::new_with_rng(&mut rng));
             Hub::load(peer_id.clone())
         };
@@ -1336,8 +1348,6 @@ impl TaskSetup {
             dialer_handles: HashMap::new(),
             acceptor_handles: HashMap::new(),
             observer: observer.clone(),
-            #[cfg(feature = "subduction")]
-            #[cfg(feature = "subduction")]
             signer: signer.clone(),
         }));
 
@@ -1361,7 +1371,7 @@ impl TaskSetup {
         runtime: R,
         storage: S,
         announce_policy: A,
-        signer: io_loop::OptionalSigner,
+        signer: Option<signer::MemorySigner>,
     ) {
         runtime.spawn(
             io_loop::io_loop(
@@ -1405,7 +1415,7 @@ impl TaskSetup {
         runtime: R,
         storage: S,
         announce_policy: A,
-        signer: io_loop::OptionalSigner,
+        signer: Option<signer::MemorySigner>,
     ) {
         runtime.spawn(
             io_loop::io_loop(

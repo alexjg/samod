@@ -43,7 +43,6 @@ pub struct RepoBuilder<S, R, A> {
     pub(crate) peer_id: Option<PeerId>,
     pub(crate) concurrency: ConcurrencyConfig,
     pub(crate) observer: Option<Arc<dyn RepoObserver>>,
-    #[cfg(feature = "subduction")]
     pub(crate) signer: Option<crate::signer::MemorySigner>,
 }
 
@@ -56,7 +55,6 @@ impl<S, R, A> RepoBuilder<S, R, A> {
             announce_policy: self.announce_policy,
             concurrency: self.concurrency,
             observer: self.observer,
-            #[cfg(feature = "subduction")]
             signer: self.signer,
         }
     }
@@ -69,7 +67,6 @@ impl<S, R, A> RepoBuilder<S, R, A> {
             announce_policy: self.announce_policy,
             concurrency: self.concurrency,
             observer: self.observer,
-            #[cfg(feature = "subduction")]
             signer: self.signer,
         }
     }
@@ -87,7 +84,6 @@ impl<S, R, A> RepoBuilder<S, R, A> {
             announce_policy,
             concurrency: self.concurrency,
             observer: self.observer,
-            #[cfg(feature = "subduction")]
             signer: self.signer,
         }
     }
@@ -114,12 +110,9 @@ impl<S, R, A> RepoBuilder<S, R, A> {
         self
     }
 
-    /// Extract the signer as an `OptionalSigner` for the IO loop.
-    pub(crate) fn signer(&self) -> crate::io_loop::OptionalSigner {
-        #[cfg(feature = "subduction")]
-        { self.signer.clone() }
-        #[cfg(not(feature = "subduction"))]
-        { () }
+    /// Extract the signer for the IO loop.
+    pub(crate) fn signer(&self) -> Option<crate::signer::MemorySigner> {
+        self.signer.clone()
     }
 }
 
@@ -132,7 +125,6 @@ impl<R> RepoBuilder<InMemoryStorage, R, AlwaysAnnounce> {
             announce_policy: AlwaysAnnounce,
             concurrency: ConcurrencyConfig::AsyncRuntime,
             observer: None,
-            #[cfg(feature = "subduction")]
             signer: None,
         }
     }

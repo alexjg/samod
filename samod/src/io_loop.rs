@@ -80,11 +80,6 @@ struct HubIoTaskComplete {
 /// Type alias for a shared, type-erased dialer.
 pub(crate) type DynDialer = Arc<dyn crate::Dialer>;
 
-#[cfg(feature = "subduction")]
-pub(crate) type OptionalSigner = Option<crate::signer::MemorySigner>;
-#[cfg(not(feature = "subduction"))]
-pub(crate) type OptionalSigner = ();
-
 #[tracing::instrument(skip(inner, storage, announce_policy, rx, dialers, observer))]
 pub(crate) async fn io_loop<S: LocalStorage, A: LocalAnnouncePolicy>(
     local_peer_id: PeerId,
@@ -94,11 +89,13 @@ pub(crate) async fn io_loop<S: LocalStorage, A: LocalAnnouncePolicy>(
     rx: UnboundedReceiver<IoLoopTask>,
     dialers: Arc<Mutex<std::collections::HashMap<DialerId, DynDialer>>>,
     observer: Option<Arc<dyn RepoObserver>>,
-    signer: OptionalSigner,
+    signer: Option<crate::signer::MemorySigner>,
 ) {
     let mut running_storage_tasks = FuturesUnordered::new();
     let mut running_hub_storage_tasks = FuturesUnordered::new();
-    let mut running_hub_sign_tasks: FuturesUnordered<std::pin::Pin<Box<dyn std::future::Future<Output = HubIoTaskComplete> + Send>>> = FuturesUnordered::new();
+    let mut running_hub_sign_tasks: FuturesUnordered<
+        std::pin::Pin<Box<dyn std::future::Future<Output = HubIoTaskComplete> + Send>>,
+    > = FuturesUnordered::new();
     let mut running_connections = FuturesUnordered::new();
     let mut running_transport_establishments = FuturesUnordered::new();
 
