@@ -89,7 +89,7 @@ pub(crate) async fn io_loop<S: LocalStorage, A: LocalAnnouncePolicy>(
     rx: UnboundedReceiver<IoLoopTask>,
     dialers: Arc<Mutex<std::collections::HashMap<DialerId, DynDialer>>>,
     observer: Option<Arc<dyn RepoObserver>>,
-    signer: Option<crate::signer::MemorySigner>,
+    signer: crate::signer::MemorySigner,
 ) {
     let mut running_storage_tasks = FuturesUnordered::new();
     let mut running_hub_storage_tasks = FuturesUnordered::new();
@@ -159,19 +159,15 @@ pub(crate) async fn io_loop<S: LocalStorage, A: LocalAnnouncePolicy>(
                     }
                     #[cfg(feature = "subduction")]
                     IoLoopTask::HubSign { task_id, payload_bytes } => {
-                        if let Some(ref signer) = signer {
-                            use crate::signer::LocalSigner as _;
-                            let signer = signer.clone();
-                            running_hub_sign_tasks.push(Box::pin(async move {
-                                let signature = signer.sign(payload_bytes).await;
-                                HubIoTaskComplete {
-                                    task_id,
-                                    result: samod_core::actors::hub::io::HubIoResult::Sign { signature },
-                                }
-                            }));
-                        } else {
-                            tracing::warn!("Sign task received but no signer configured");
-                        }
+                        use crate::signer::LocalSigner as _;
+                        let signer = signer.clone();
+                        running_hub_sign_tasks.push(Box::pin(async move {
+                            let signature = signer.sign(payload_bytes).await;
+                            HubIoTaskComplete {
+                                task_id,
+                                result: samod_core::actors::hub::io::HubIoResult::Sign { signature },
+                            }
+                        }));
                     }
                     IoLoopTask::Tick => {
                         inner.lock().unwrap().handle_event(HubEvent::tick());

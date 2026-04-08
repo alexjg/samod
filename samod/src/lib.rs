@@ -462,11 +462,12 @@ impl Repo {
         )
         .await;
         let inner = task_setup.inner.clone();
+        let resolved_signer = task_setup.signer.clone();
         task_setup.spawn_tasks(
             builder.runtime,
             builder.storage,
             builder.announce_policy,
-            signer,
+            resolved_signer,
         );
         Self { inner }
     }
@@ -489,11 +490,12 @@ impl Repo {
         )
         .await;
         let inner = task_setup.inner.clone();
+        let resolved_signer = task_setup.signer.clone();
         task_setup.spawn_tasks_local(
             builder.runtime,
             builder.storage,
             builder.announce_policy,
-            signer,
+            resolved_signer,
         );
         Self { inner }
     }
@@ -862,7 +864,7 @@ struct Inner {
     dialer_handles: HashMap<DialerId, DialerHandle>,
     acceptor_handles: HashMap<ListenerId, AcceptorHandle>,
     observer: Option<Arc<dyn observer::RepoObserver>>,
-    signer: Option<signer::MemorySigner>,
+    signer: signer::MemorySigner,
 }
 
 impl Inner {
@@ -1279,6 +1281,7 @@ struct TaskSetup {
     rx_actor: Option<UnboundedReceiver<SpawnedActor>>,
     dialers: Arc<Mutex<HashMap<DialerId, io_loop::DynDialer>>>,
     observer: Option<Arc<dyn observer::RepoObserver>>,
+    signer: signer::MemorySigner,
 }
 
 impl TaskSetup {
@@ -1291,15 +1294,19 @@ impl TaskSetup {
     ) -> TaskSetup {
         let mut rng = rand::rngs::StdRng::from_rng(&mut rand::rng());
 
+        let signer: signer::MemorySigner = match signer {
+            Some(s) => s.clone(),
+            None => {
+                let signer_bytes: [u8; 32] = rand::Rng::random(&mut rng);
+                let signing_key = ed25519_dalek::SigningKey::from_bytes(&signer_bytes);
+                signer::MemorySigner::new(signing_key)
+            }
+        };
+
         #[cfg(feature = "subduction")]
-        let loader = if let Some(signer) = signer {
+        let loader = {
             use crate::signer::Signer as _;
             Hub::load(&signer.verifying_key(), None)
-        } else {
-            // No signer provided — generate a temporary verifying key to bootstrap.
-            let signer_bytes: [u8; 32] = rand::Rng::random(&mut rng);
-            let signing_key = ed25519_dalek::SigningKey::from_bytes(&signer_bytes);
-            Hub::load(&signing_key.verifying_key(), None)
         };
 
         #[cfg(not(feature = "subduction"))]
@@ -1360,6 +1367,7 @@ impl TaskSetup {
             rx_storage,
             dialers,
             observer,
+            signer,
         }
     }
     fn spawn_tasks_local<
@@ -1371,7 +1379,7 @@ impl TaskSetup {
         runtime: R,
         storage: S,
         announce_policy: A,
-        signer: Option<signer::MemorySigner>,
+        signer: signer::MemorySigner,
     ) {
         runtime.spawn(
             io_loop::io_loop(
@@ -1415,7 +1423,7 @@ impl TaskSetup {
         runtime: R,
         storage: S,
         announce_policy: A,
-        signer: Option<signer::MemorySigner>,
+        signer: signer::MemorySigner,
     ) {
         runtime.spawn(
             io_loop::io_loop(
