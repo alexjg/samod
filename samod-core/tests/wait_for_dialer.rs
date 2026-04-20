@@ -9,7 +9,7 @@
 use std::time::Duration;
 
 use automerge::{ROOT, ReadDoc, transaction::Transactable};
-use samod_core::{BackoffConfig, DialerConfig, DocumentId};
+use samod_core::{BackoffConfig, DialerConfig, DocSearchPhase, DocumentId};
 use samod_test_harness::{Network, RunningDocIds};
 
 fn init_logging() {
@@ -81,18 +81,22 @@ fn find_with_connecting_dialer_stays_pending() {
         .samod(&bob)
         .add_dialer(non_retrying_dialer("wss://sync.example.com"));
 
-    // Start a find for a document that doesn't exist locally
+    // Start a search for a document that doesn't exist locally
     let fake_doc_id = DocumentId::new(&mut rand::rng());
-    let find_cmd = network.samod(&bob).begin_find_document(&fake_doc_id);
+    network.samod(&bob).search_for_doc(&fake_doc_id);
 
     // Process events
     network.run_until_quiescent();
 
-    // The find should NOT have completed — the dialer is still connecting
-    let result = network.samod(&bob).check_find_document_result(find_cmd);
+    // The search should NOT have completed — the dialer is still connecting
+    let search_status = network
+        .samod(&bob)
+        .search_status(&fake_doc_id)
+        .expect("search status should exist")
+        .clone();
     assert!(
-        result.is_none(),
-        "find should still be pending while dialer is connecting"
+        !search_status.is_currently_unavailable(),
+        "search should still be running while dialer is connecting"
     );
 }
 
@@ -115,7 +119,7 @@ fn connected_with_long_handshake_does_not_mark_notfound() {
 
     // Start a find for a document that doesn't exist locally
     let fake_doc_id = DocumentId::new(&mut rand::rng());
-    let find_cmd = network.samod(&bob).begin_find_document(&fake_doc_id);
+    network.samod(&bob).search_for_doc(&fake_doc_id);
 
     // Process events
     network.run_until_quiescent();
@@ -124,15 +128,19 @@ fn connected_with_long_handshake_does_not_mark_notfound() {
     network.samod(&bob).create_dialer_connection(dialer_id);
 
     // The find should NOT have completed — the dialer is still connecting
-    let result = network.samod(&bob).check_find_document_result(find_cmd);
+    let search_status = network
+        .samod(&bob)
+        .search_status(&fake_doc_id)
+        .expect("search status should exist")
+        .clone();
     assert!(
-        result.is_none(),
-        "find should still be pending while dialer is connecting"
+        !search_status.is_currently_unavailable(),
+        "search should still be pending while dialer is connecting, got {search_status:?}"
     );
 }
 
-/// When a dialer connects and the remote peer has the document, the find
-/// should resolve to Ready. We connect the dialer before issuing find
+/// When a dialer connects and the remote peer has the document, the search
+/// should resolve to Ready. We connect the dialer before issuing search
 /// because in the real runtime the handshake completes within the same
 /// event loop iteration as `create_dialer_connection`, so the document
 /// actor receives `NewConnection` before it can check dialer states.
@@ -155,11 +163,13 @@ fn find_resolves_when_dialer_connects() {
     network.run_until_quiescent();
 
     // Now Bob finds the document — should sync from Alice and complete
-    let result = network.samod(&bob).find_document(&doc_id);
-    assert!(
-        result.is_some(),
-        "find should resolve to found after dialer connects"
-    );
+    network.samod(&bob).search_for_doc(&doc_id);
+    let search_status = network
+        .samod(&bob)
+        .search_status(&doc_id)
+        .expect("search status should exist")
+        .clone();
+    assert_eq!(search_status.phase(), &DocSearchPhase::Ready);
 
     // Verify the document content was synced
     let bob_ref = network.samod(&bob);
@@ -188,14 +198,22 @@ fn find_resolves_to_not_found_when_dialer_fails() {
 
     // Start finding a document
     let fake_doc_id = DocumentId::new(&mut rand::rng());
-    let find_cmd = network.samod(&bob).begin_find_document(&fake_doc_id);
+    network.samod(&bob).search_for_doc(&fake_doc_id);
     network.run_until_quiescent();
 
     // Find should still be pending
-    let result = network.samod(&bob).check_find_document_result(find_cmd);
+    let search_status = network
+        .samod(&bob)
+        .search_status(&fake_doc_id)
+        .expect("search status should exist")
+        .clone();
+    assert!(matches!(
+        search_status.phase(),
+        DocSearchPhase::Searching(_)
+    ));
     assert!(
-        result.is_none(),
-        "find should be pending while dialer is connecting"
+        !search_status.is_currently_unavailable(),
+        "search should still be running while dialer is connecting"
     );
 
     // Dialer fails permanently
@@ -205,10 +223,14 @@ fn find_resolves_to_not_found_when_dialer_fails() {
     network.run_until_quiescent();
 
     // Now the find should complete as NotFound
-    let result = network.samod(&bob).check_find_document_result(find_cmd);
+    let search_status = network
+        .samod(&bob)
+        .search_status(&fake_doc_id)
+        .expect("search status should exist")
+        .clone();
     assert!(
-        matches!(result, Some(None)),
-        "find should resolve to not found after dialer fails: got {result:?}"
+        search_status.is_currently_unavailable(),
+        "search should resolve to not found after dialer fails: got {search_status:?}",
     );
 }
 
@@ -233,13 +255,21 @@ fn waiting_to_retry_does_not_block_not_found() {
 
     // Start finding a document — pending because dialer is connecting
     let fake_doc_id = DocumentId::new(&mut rand::rng());
-    let find_cmd = network.samod(&bob).begin_find_document(&fake_doc_id);
+    network.samod(&bob).search_for_doc(&fake_doc_id);
     network.run_until_quiescent();
 
-    let result = network.samod(&bob).check_find_document_result(find_cmd);
+    let search_status = network
+        .samod(&bob)
+        .search_status(&fake_doc_id)
+        .unwrap()
+        .clone();
+    assert!(matches!(
+        search_status.phase(),
+        &DocSearchPhase::Searching(_)
+    ));
     assert!(
-        result.is_none(),
-        "find should be pending while dialer is connecting"
+        !search_status.is_currently_unavailable(),
+        "search should be pending while dialer is connecting"
     );
 
     // Dialer fails but will retry — transitions to WaitingToRetry
@@ -249,10 +279,14 @@ fn waiting_to_retry_does_not_block_not_found() {
     network.run_until_quiescent();
 
     // WaitingToRetry should NOT block NotFound
-    let result = network.samod(&bob).check_find_document_result(find_cmd);
+    let search_status = network
+        .samod(&bob)
+        .search_status(&fake_doc_id)
+        .unwrap()
+        .clone();
     assert!(
-        matches!(result, Some(None)),
-        "find should resolve to not found when dialer is in WaitingToRetry: got {result:?}"
+        search_status.is_currently_unavailable(),
+        "search should resolve to unavailable when dialer is in WaitingToRetry: got {search_status:?}"
     );
 }
 
@@ -272,13 +306,17 @@ fn removing_dialer_while_waiting_triggers_not_found() {
 
     // Start finding a document
     let fake_doc_id = DocumentId::new(&mut rand::rng());
-    let find_cmd = network.samod(&bob).begin_find_document(&fake_doc_id);
+    network.samod(&bob).search_for_doc(&fake_doc_id);
     network.run_until_quiescent();
 
     // Find should be pending
-    let result = network.samod(&bob).check_find_document_result(find_cmd);
+    let search_status = network
+        .samod(&bob)
+        .search_status(&fake_doc_id)
+        .unwrap()
+        .clone();
     assert!(
-        result.is_none(),
+        !search_status.is_currently_unavailable(),
         "find should be pending while dialer exists"
     );
 
@@ -287,10 +325,14 @@ fn removing_dialer_while_waiting_triggers_not_found() {
     network.run_until_quiescent();
 
     // Find should now complete as NotFound
-    let result = network.samod(&bob).check_find_document_result(find_cmd);
+    let search_status = network
+        .samod(&bob)
+        .search_status(&fake_doc_id)
+        .unwrap()
+        .clone();
     assert!(
-        matches!(result, Some(None)),
-        "find should resolve to not found after dialer is removed: got {result:?}"
+        search_status.is_currently_unavailable(),
+        "search should resolve to not found after dialer is removed: got {search_status:?}"
     );
 }
 
@@ -313,14 +355,22 @@ fn multiple_dialers_stays_pending_while_any_connecting() {
 
     // Start finding a document
     let fake_doc_id = DocumentId::new(&mut rand::rng());
-    let find_cmd = network.samod(&bob).begin_find_document(&fake_doc_id);
+    network.samod(&bob).search_for_doc(&fake_doc_id);
     network.run_until_quiescent();
 
     // Find should be pending
-    let result = network.samod(&bob).check_find_document_result(find_cmd);
+    let search_status = network
+        .samod(&bob)
+        .search_status(&fake_doc_id)
+        .unwrap()
+        .clone();
+    assert!(matches!(
+        search_status.phase(),
+        DocSearchPhase::Searching(_)
+    ));
     assert!(
-        result.is_none(),
-        "find should be pending with two connecting dialers"
+        !search_status.is_currently_unavailable(),
+        "search should be pending with two connecting dialers"
     );
 
     // First dialer fails permanently
@@ -330,10 +380,14 @@ fn multiple_dialers_stays_pending_while_any_connecting() {
     network.run_until_quiescent();
 
     // Find should STILL be pending — dialer2 is still connecting
-    let result = network.samod(&bob).check_find_document_result(find_cmd);
+    let search_status = network
+        .samod(&bob)
+        .search_status(&fake_doc_id)
+        .unwrap()
+        .clone();
     assert!(
-        result.is_none(),
-        "find should still be pending while second dialer is connecting: got {result:?}"
+        !search_status.is_currently_unavailable(),
+        "search should still be pending while second dialer is connecting: got {search_status:?}"
     );
 }
 
@@ -356,7 +410,7 @@ fn multiple_dialers_not_found_when_all_fail() {
 
     // Start finding a document
     let fake_doc_id = DocumentId::new(&mut rand::rng());
-    let find_cmd = network.samod(&bob).begin_find_document(&fake_doc_id);
+    network.samod(&bob).search_for_doc(&fake_doc_id);
     network.run_until_quiescent();
 
     // Both dialers fail
@@ -369,9 +423,13 @@ fn multiple_dialers_not_found_when_all_fail() {
     network.run_until_quiescent();
 
     // Now find should resolve to NotFound
-    let result = network.samod(&bob).check_find_document_result(find_cmd);
+    let search_status = network
+        .samod(&bob)
+        .search_status(&fake_doc_id)
+        .unwrap()
+        .clone();
     assert!(
-        matches!(result, Some(None)),
-        "find should resolve to not found when all dialers have failed: got {result:?}"
+        search_status.is_currently_unavailable(),
+        "search should resolve to not found when all dialers have failed: got {search_status:?}"
     );
 }

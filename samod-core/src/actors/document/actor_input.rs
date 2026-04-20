@@ -1,10 +1,8 @@
-use std::collections::HashMap;
-
 use crate::{
-    DialerId, UnixTimestamp,
+    UnixTimestamp,
     actors::{
         document::io::DocumentIoResult,
-        messages::{DocDialerState, DocMessage, HubToDocMsgPayload},
+        messages::{DocMessage, HubToDocMsgPayload},
     },
     io::IoResult,
 };
@@ -30,12 +28,7 @@ pub(crate) enum ActorInput {
         connection_id: crate::ConnectionId,
     },
     IoComplete(IoResult<DocumentIoResult>),
-    Request,
     Tick,
-    /// The set of dialer states has changed.
-    DialerStatesChanged {
-        dialers: HashMap<DialerId, DocDialerState>,
-    },
 }
 
 /// Convert external messages to internal input messages
@@ -61,10 +54,6 @@ impl From<HubToDocMsgPayload> for ActorInput {
             },
             HubToDocMsgPayload::ConnectionClosed { connection_id } => {
                 ActorInput::ConnectionClosed { connection_id }
-            }
-            HubToDocMsgPayload::RequestAgain => ActorInput::Request,
-            HubToDocMsgPayload::DialerStatesChanged { dialers } => {
-                ActorInput::DialerStatesChanged { dialers }
             }
         }
     }

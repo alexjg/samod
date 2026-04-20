@@ -1,11 +1,10 @@
 use std::collections::HashMap;
-use std::time::Instant;
 
 use crate::{
-    ConnectionId, DialerId, DocumentActorId, DocumentId, ListenerId, PeerId, StorageId,
+    ConnectionId, DialerId, DocSearch, DocumentActorId, DocumentId, ListenerId, PeerId, StorageId,
     UnixTimestamp,
     actors::{
-        document::{DocumentStatus, SpawnArgs},
+        document::SpawnArgs,
         hub::{
             Command, HubEvent, HubEventPayload, HubInput, HubResults,
             connection::{ConnectionArgs, ReceiveEvent},
@@ -13,8 +12,9 @@ use crate::{
             io::{HubIoAction, HubIoResult},
             listener::ListenerState,
         },
-        messages::{Broadcast, DocDialerState, DocMessage, DocToHubMsgPayload, HubToDocMsgPayload},
+        messages::{Broadcast, DocMessage, DocToHubMsgPayload, HubToDocMsgPayload},
     },
+    doc_search::DocSearchPhase,
     ephemera::{EphemeralMessage, EphemeralSession, OutgoingSessionDetails},
     network::{
         ConnDirection, ConnectionEvent, ConnectionInfo, ConnectionOwner, ConnectionState,
@@ -29,6 +29,9 @@ use automerge::Automerge;
 
 use super::{CommandId, CommandResult, RunState, connection::Connection};
 mod pending_commands;
+
+mod searches;
+use searches::Searches;
 
 pub(crate) struct State {
     /// The storage ID that identifies this peer's storage layer.
@@ -59,9 +62,7 @@ pub(crate) struct State {
     /// Registered listeners (incoming connections)
     listeners: HashMap<ListenerId, ListenerState>,
 
-    /// Cached dialer states last broadcast to document actors, used for
-    /// change detection so we only send updates when something changed.
-    last_dialer_states: HashMap<DialerId, DocDialerState>,
+    searches: Searches,
 }
 
 impl State {
@@ -81,7 +82,7 @@ impl State {
             run_state: RunState::Running,
             dialers: HashMap::new(),
             listeners: HashMap::new(),
-            last_dialer_states: HashMap::new(),
+            searches: Searches::new(),
         }
     }
 
@@ -101,6 +102,31 @@ impl State {
     /// Returns the current attempt count for a dialer.
     pub(crate) fn dialer_attempt(&self, dialer_id: DialerId) -> Option<u32> {
         self.dialers.get(&dialer_id).map(|d| d.attempts)
+    }
+
+    /// Returns URLs of dialers that haven't yet connected.
+    /// These represent in-progress or pending connection attempts that might
+    /// still find the document.
+    pub(crate) fn pending_dialer_urls(&self) -> Vec<url::Url> {
+        use super::dialer::DialerStatus;
+        self.dialers
+            .values()
+            .filter(|d| match d.status {
+                // A connected dialer which is still waiting for the handshake to complete
+                DialerStatus::Connected { connection_id } => self
+                    .connections
+                    .get(&connection_id)
+                    .map(|c| c.remote_peer_id().is_none())
+                    .unwrap_or(false),
+                // Dialers who are waiting for transport to establish
+                DialerStatus::NeedTransport => true,
+                DialerStatus::TransportPending => true,
+                // Failed dialers
+                DialerStatus::WaitingToRetry { .. } => false,
+                DialerStatus::Failed => false,
+            })
+            .map(|d| d.url.clone())
+            .collect()
     }
 
     pub(crate) fn add_connection(
@@ -240,26 +266,6 @@ impl State {
             .map(|actor| actor.document_id.clone())
     }
 
-    /// Adds a command ID to the list of commands waiting for a document operation to complete.
-    pub(crate) fn add_pending_find_command(
-        &mut self,
-        document_id: DocumentId,
-        command_id: CommandId,
-    ) {
-        self.pending_commands
-            .add_pending_find_command(document_id, command_id);
-    }
-
-    /// Adds a command ID to the list of commands waiting for an actor to report readiness.
-    pub(crate) fn add_pending_create_command(
-        &mut self,
-        actor_id: DocumentActorId,
-        command_id: CommandId,
-    ) {
-        self.pending_commands
-            .add_pending_create_command(actor_id, command_id);
-    }
-
     pub(crate) fn pop_completed_commands(&mut self) -> Vec<(CommandId, CommandResult)> {
         self.pending_commands.pop_completed_commands()
     }
@@ -268,30 +274,20 @@ impl State {
         self.actors.values()
     }
 
-    pub(crate) fn update_document_status(
+    pub(crate) fn update_document_search_phase(
         &mut self,
         actor_id: DocumentActorId,
-        new_status: DocumentStatus,
+        new_phase: DocSearchPhase,
     ) {
         let Some(actor_info) = self.actors.get_mut(&actor_id) else {
             tracing::warn!("document actor ID not found in actors: {:?}", actor_id);
             return;
         };
-        actor_info.status = new_status;
+        actor_info.search_phase = new_phase.clone();
         let doc_id = actor_info.document_id.clone();
-        match new_status {
-            DocumentStatus::Ready => {
-                self.pending_commands
-                    .resolve_pending_create(actor_id, &doc_id);
-                self.pending_commands
-                    .resolve_pending_find(&doc_id, actor_id, true);
-            }
-            DocumentStatus::NotFound => {
-                assert!(!self.pending_commands.has_pending_create(actor_id));
-                self.pending_commands
-                    .resolve_pending_find(&doc_id, actor_id, false);
-            }
-            _ => {}
+        if new_phase == DocSearchPhase::Ready {
+            self.pending_commands
+                .resolve_pending_create(actor_id, &doc_id);
         }
     }
 
@@ -438,9 +434,6 @@ impl State {
                         self.handle_tick(rng, now, results);
                     }
                     HubInput::ActorMessage { actor_id, message } => match message {
-                        DocToHubMsgPayload::DocumentStatusChanged { new_status } => {
-                            self.update_document_status(actor_id, new_status);
-                        }
                         DocToHubMsgPayload::SendSyncMessage {
                             document_id,
                             connection_id,
@@ -464,8 +457,11 @@ impl State {
                                 );
                             }
                         }
-                        DocToHubMsgPayload::PeerStatesChanged { new_states } => {
+                        DocToHubMsgPayload::PeerStatesChanged(new_states) => {
                             self.update_peer_states(actor_id, new_states);
+                        }
+                        DocToHubMsgPayload::DocSearchChanged(new_phase) => {
+                            self.update_document_search_phase(actor_id, new_phase);
                         }
                         DocToHubMsgPayload::Broadcast { connections, msg } => {
                             self.broadcast(results, actor_id, connections, msg);
@@ -527,7 +523,6 @@ impl State {
         }
 
         // Now ensure that every connection is connected to every document
-        let ensure_start = Instant::now();
         if self.run_state == RunState::Running {
             for (actor_id, conn_id, peer_id) in self.ensure_connections() {
                 results.send_to_doc_actor(
@@ -539,14 +534,12 @@ impl State {
                 );
             }
         }
-        let ensure_elapsed = ensure_start.elapsed();
         let conns = self.connections.len();
         let docs = self.document_to_actor.len();
-        tracing::debug!(
+        tracing::trace!(
             event_type,
             connections = conns,
             documents = docs,
-            ensure_connections_us = ensure_elapsed.as_micros(),
             "hub event processed"
         );
 
@@ -564,12 +557,11 @@ impl State {
             }
         }
 
-        // Broadcast dialer state changes to all document actors
-        self.broadcast_dialer_states_if_changed(results);
-
         for (command_id, result) in self.pop_completed_commands() {
             results.completed_commands.insert(command_id, result);
         }
+
+        self.emit_search_state_updates(results);
 
         if self.run_state == RunState::Stopping {
             if self.actors.is_empty() {
@@ -605,8 +597,8 @@ impl State {
                 self.handle_create_document(rng, out, command_id, *content);
                 None
             }
-            Command::FindDocument { document_id } => {
-                self.handle_find_document(out, command_id, document_id)
+            Command::SearchForDoc { document_id } => {
+                self.handle_search_for_doc(out, command_id, document_id)
             }
         }
     }
@@ -766,51 +758,46 @@ impl State {
         tracing::debug!(%document_id, "creating new document");
 
         let actor_id = self.spawn_actor(out, document_id, Some(init_doc), None);
+        self.searches.add_search(actor_id, DocSearchPhase::Ready);
 
         // Queue command for completion when actor reports ready
-        self.add_pending_create_command(actor_id, command_id);
+        self.pending_commands
+            .add_pending_create_command(actor_id, command_id);
     }
 
     #[tracing::instrument(skip(self, out), fields(document_id = %document_id))]
-    fn handle_find_document(
+    fn handle_search_for_doc(
         &mut self,
         out: &mut HubResults,
         command_id: CommandId,
         document_id: DocumentId,
     ) -> Option<CommandResult> {
-        tracing::debug!("find document command received");
-        // Check if actor already exists and is ready
-        if let Some(actor_info) = self.find_actor_for_document(&document_id) {
-            tracing::trace!(%actor_info.actor_id, ?actor_info.status, "found existing actor for document");
-            return match actor_info.status {
-                DocumentStatus::Spawned | DocumentStatus::Requesting | DocumentStatus::Loading => {
-                    self.add_pending_find_command(document_id, command_id);
-                    None
-                }
-                DocumentStatus::Ready => {
-                    // Document is ready
-                    Some(CommandResult::FindDocument {
-                        found: true,
-                        actor_id: actor_info.actor_id,
-                    })
-                }
-                DocumentStatus::NotFound => {
-                    // In this case we need to restart the request process
-                    tracing::trace!(%actor_info.actor_id, ?actor_info.status, "re-requesting document from actor");
-                    out.send_to_doc_actor(actor_info.actor_id, HubToDocMsgPayload::RequestAgain);
+        tracing::debug!("search document command received");
 
-                    self.add_pending_find_command(document_id, command_id);
-                    None
-                }
-            };
-        }
+        let actor_id = if let Some(existing) = self.find_actor_for_document(&document_id) {
+            tracing::trace!(actor_id=%existing.actor_id, status=?existing.search_phase, "found existing actor for document");
+            existing.actor_id
+        } else {
+            tracing::trace!("no existing actor found for document, spawning new actor");
+            self.spawn_actor(out, document_id, None, None)
+        };
 
-        tracing::trace!("no existing actor found for document, spawning new actor");
+        // Return a synchronous snapshot of the current search state. Subsequent
+        // state changes are delivered through `HubResults::search_state_updates`.
+        let phase = self
+            .actors
+            .get(&actor_id)
+            .map(|info| info.search_phase.clone())
+            .unwrap_or(DocSearchPhase::Loading);
+        let search_state = DocSearch {
+            phase,
+            pending_connections: self.pending_dialer_urls(),
+        };
 
-        self.spawn_actor(out, document_id.clone(), None, None);
-
-        self.add_pending_find_command(document_id, command_id);
-        None
+        Some(CommandResult::SearchForDoc {
+            actor_id,
+            search_state,
+        })
     }
 
     fn notify_doc_actors_of_removed_connection(
@@ -897,7 +884,6 @@ impl State {
             document_id,
             initial_content: initial_doc,
             initial_connections,
-            dialer_states: self.current_doc_dialer_states(),
         });
 
         actor_id
@@ -959,37 +945,6 @@ impl State {
                 },
             };
             out.send(conn, msg.encode());
-        }
-    }
-
-    // ---- Dialer state broadcasting ----
-
-    /// Compute the current dialer states as seen by document actors.
-    fn current_doc_dialer_states(&self) -> HashMap<DialerId, DocDialerState> {
-        self.dialers
-            .iter()
-            .map(|(id, dialer)| (*id, dialer.to_doc_state(&self.connections)))
-            .collect()
-    }
-
-    /// If dialer states have changed since the last broadcast, send the new
-    /// states to all document actors and update the cache.
-    fn broadcast_dialer_states_if_changed(&mut self, results: &mut HubResults) {
-        let current = self.current_doc_dialer_states();
-        if current != self.last_dialer_states {
-            tracing::trace!(
-                ?current,
-                "broadcasting dialer state change to document actors"
-            );
-            for actor in self.actors.values() {
-                results.send_to_doc_actor(
-                    actor.actor_id,
-                    HubToDocMsgPayload::DialerStatesChanged {
-                        dialers: current.clone(),
-                    },
-                );
-            }
-            self.last_dialer_states = current;
         }
     }
 
@@ -1305,6 +1260,26 @@ impl State {
         if let Some(dialer) = self.dialers.get_mut(&dialer_id) {
             dialer.reset_backoff();
         }
+    }
+
+    fn emit_search_state_updates(&mut self, results: &mut HubResults) {
+        let updates = self.searches.pop_state_updates(&self.actors, &self.dialers);
+        if updates.is_empty() {
+            return;
+        }
+        let pending_dialer_urls = self.pending_dialer_urls();
+        updates.into_iter().for_each(|(actor_id, new_phase)| {
+            let Some(actor) = self.actors.get(&actor_id) else {
+                return;
+            };
+            results.search_state_updates.push((
+                actor.document_id.clone(),
+                DocSearch {
+                    phase: new_phase,
+                    pending_connections: pending_dialer_urls.clone(),
+                },
+            ));
+        });
     }
 }
 
