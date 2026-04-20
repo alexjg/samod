@@ -2,8 +2,8 @@ use std::collections::HashMap;
 
 use automerge::Automerge;
 use samod_core::{
-    CommandId, ConnectionId, DialerId, DocumentActorId, DocumentChanged, DocumentId, PeerId,
-    StorageId,
+    CommandId, ConnectionId, DialerId, DocSearch, DocumentActorId, DocumentChanged, DocumentId,
+    PeerId, StorageId,
     actors::{DocumentError, hub::HubEvent},
     network::{ConnectionEvent, ConnectionInfo, DialerConfig, PeerDocState},
 };
@@ -12,7 +12,7 @@ use crate::samod_id::SamodId;
 
 use super::{SamodWrapper, running_doc_ids::RunningDocIds};
 
-// A wrapper struct which provides aconvenience API to access a `SamodWrapper`
+// A wrapper struct which provides convenience API to access a `SamodWrapper`
 pub struct SamodRef<'a> {
     pub(super) samod_id: &'a SamodId,
     pub(super) network: &'a mut super::Network,
@@ -47,27 +47,49 @@ impl SamodRef<'_> {
         self.wrapper().check_create_document_result(command_id)
     }
 
+    /// Search for a document, returning the actor ID immediately.
+    ///
+    /// Note: With Search API, this returns immediately.
+    /// Use `is_document_available()` to check if the document has content.
+    pub fn search_for_doc(
+        &mut self,
+        doc_id: &samod_core::DocumentId,
+    ) -> samod_core::DocumentActorId {
+        let command_id = self.wrapper().start_search_document(doc_id);
+        self.wrapper().handle_events();
+        self.wrapper()
+            .check_search_document_result(command_id)
+            .expect("search for doc command never completed")
+    }
+
+    /// Get the current search status for some document. Returns `None` if no
+    /// search command has been issued for the document
+    pub fn search_status(&self, doc_id: &samod_core::DocumentId) -> Option<&DocSearch> {
+        self.wrapper_ref().search_status(doc_id)
+    }
+
+    /// Find a document, returning `Some(actor_id)` if found, `None` if not available.
+    ///
+    /// This uses the search API. It runs the network until quiescent and then
+    /// checks whether the document has content. Returns `Some(actor_id)` if the
+    /// document was found and synced, `None` if all peers are unavailable.
     pub fn find_document(
         &mut self,
         doc_id: &samod_core::DocumentId,
     ) -> Option<samod_core::DocumentActorId> {
-        let command_id = self.wrapper().start_find_document(doc_id);
-        self.wrapper().handle_events();
+        let actor_id = self.search_for_doc(doc_id);
         self.network.run_until_quiescent();
-        self.wrapper()
-            .check_find_document_result(command_id)
-            .expect("find command never completed")
+
+        if self.is_document_available(doc_id) {
+            Some(actor_id)
+        } else {
+            None
+        }
     }
 
-    pub fn begin_find_document(&mut self, doc_id: &samod_core::DocumentId) -> CommandId {
-        self.wrapper().start_find_document(doc_id)
-    }
-
-    pub fn check_find_document_result(
-        &mut self,
-        command_id: CommandId,
-    ) -> Option<Option<samod_core::DocumentActorId>> {
-        self.wrapper().check_find_document_result(command_id)
+    /// Check if a document is available (has content from sync).
+    pub fn is_document_available(&mut self, doc_id: &DocumentId) -> bool {
+        self.wrapper().is_document_available(doc_id)
     }
 
     pub fn get_actor(
@@ -209,7 +231,7 @@ impl SamodRef<'_> {
         &self,
         doc_id: &DocumentId,
     ) -> &[HashMap<ConnectionId, PeerDocState>] {
-        self.wrapper_ref().peer_state_changes(doc_id)
+        self.wrapper_ref().peer_doc_state_changes(doc_id)
     }
 
     pub fn pause_storage(&mut self) {

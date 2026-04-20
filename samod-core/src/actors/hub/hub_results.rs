@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::{
-    DocumentActorId,
+    DocSearch, DocumentActorId, DocumentId,
     actors::{
         HubToDocMsg,
         document::SpawnArgs,
@@ -59,6 +59,11 @@ pub struct HubResults {
 
     /// Diagnostics: number of active document actors after processing.
     pub documents_count: usize,
+
+    /// [`DocSearch`] state updates built from document status + peer request states + dialer info.
+    /// Each entry contains the document ID and the DocSearch that should be
+    /// forwarded to any search stream subscribers.
+    pub search_state_updates: Vec<(DocumentId, DocSearch)>,
 }
 
 impl HubResults {

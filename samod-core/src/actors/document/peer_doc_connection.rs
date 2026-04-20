@@ -8,7 +8,7 @@ use automerge::{
 use crate::{ConnectionId, PeerId, UnixTimestamp, network::PeerDocState};
 
 #[derive(Debug)]
-pub(super) struct PeerDocConnection {
+pub(crate) struct PeerDocConnection {
     pub(super) connection_id: ConnectionId,
     pub(super) peer_id: PeerId,
     pub(super) sync_state: sync::State,

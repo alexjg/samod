@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::{
-    ConnectionId, DocumentId, actors::document::DocumentStatus, ephemera::EphemeralMessage,
+    ConnectionId, DocumentId, doc_search::DocSearchPhase, ephemera::EphemeralMessage,
     network::PeerDocState,
 };
 
@@ -13,13 +13,9 @@ pub struct DocToHubMsg(pub(crate) DocToHubMsgPayload);
 
 #[derive(Debug, Clone)]
 pub(crate) enum DocToHubMsgPayload {
-    DocumentStatusChanged {
-        new_status: DocumentStatus,
-    },
+    DocSearchChanged(DocSearchPhase),
 
-    PeerStatesChanged {
-        new_states: HashMap<ConnectionId, PeerDocState>,
-    },
+    PeerStatesChanged(HashMap<ConnectionId, PeerDocState>),
 
     SendSyncMessage {
         connection_id: ConnectionId,

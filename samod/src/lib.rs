@@ -293,11 +293,13 @@ use std::{
 };
 
 use automerge::Automerge;
-use futures::{FutureExt, Stream, StreamExt, channel::oneshot, stream::FuturesUnordered};
+use futures::{
+    FutureExt, Stream, StreamExt, channel::mpsc, channel::oneshot, stream::FuturesUnordered,
+};
 use rand::SeedableRng;
 pub use samod_core::{
-    AutomergeUrl, BackoffConfig, ConnectionId, DialerId, DocumentId, ListenerId, PeerId, StorageId,
-    network::ConnDirection,
+    AutomergeUrl, BackoffConfig, ConnectionId, DialerId, DocSearch, DocumentId, ListenerId, PeerId,
+    PeerRequestState, StorageId, network::ConnDirection,
 };
 use samod_core::{
     CommandId, CommandResult, DocumentActorId, LoaderState, UnixTimestamp,
@@ -340,6 +342,8 @@ mod peer_connection_info;
 mod peer_info;
 pub use peer_connection_info::{ConnectionInfo, ConnectionState, PeerDocState};
 pub use peer_info::PeerInfo;
+mod search;
+pub use search::SearchState;
 mod stopped;
 pub use stopped::Stopped;
 pub mod storage;
@@ -529,6 +533,65 @@ impl Repo {
         }
     }
 
+    /// Search for a document by ID, returning the current state plus a stream
+    /// of subsequent updates.
+    ///
+    /// Searching for a document causes the [`Repo`] to first load the document
+    /// from storage, and then begin synchronizing it with peers. If the document
+    /// isn't found locally then the document will be requested from connected
+    /// peers. This process is reified in the [`RepoSearchState`] enum which
+    /// this method returns.
+    ///
+    /// If the document is found then the stream will emit a
+    /// [`RepoSearchState::Found`] state containing the `DocHandle`. If the document
+    /// is not found then the stream will step through [`RepoSearchState::Loading`]
+    /// and then [`RepoSearchState::Requesting`] states. which enables the caller
+    /// to track the progress of the search. See the documentation for [`RepoSearchState`]
+    /// for more details.
+    ///
+    /// The stream emits a new [`RepoSearchState`] each time the state of the
+    /// search changes: as peers are contacted, respond, sync progresses, and
+    /// dialers connect. The stream never completes on its own — drop it to
+    /// cancel the subscription.
+    ///
+    /// Returns `Err(Stopped)` if the repo has been stopped.
+    ///
+    /// Callers who just want a convenient "find this document or tell me it
+    /// doesn't exist" semantic should use [`Repo::find`] instead.
+    pub fn search(
+        &self,
+        doc_id: DocumentId,
+    ) -> Result<(SearchState, impl Stream<Item = SearchState> + 'static), Stopped> {
+        let (tx_stream, rx_stream) = mpsc::unbounded::<SearchState>();
+        let mut inner = self.inner.lock().unwrap();
+
+        let DispatchedCommand { command_id, event } = HubEvent::search_for_doc(doc_id.clone());
+        let (tx_result, mut rx_result) = oneshot::channel();
+        inner.pending_commands.insert(command_id, tx_result);
+        inner.handle_event(event);
+
+        let (actor_id, search_state) = match rx_result.try_recv() {
+            Ok(Some(CommandResult::SearchForDoc {
+                actor_id,
+                search_state,
+            })) => (actor_id, search_state),
+            Ok(None) => return Err(Stopped), // Hub is stopped; event was ignored.
+            Ok(Some(other)) => panic!("unexpected command result {:?} for search_for_doc", other),
+            Err(_) => return Err(Stopped),
+        };
+
+        let initial = search::SearchState::from_doc_search(search_state, actor_id, &inner.actors);
+
+        // Register the subscriber for future updates only after we've
+        // consumed the initial snapshot so it isn't delivered twice.
+        inner
+            .search_state_streams
+            .entry(doc_id)
+            .or_default()
+            .push(tx_stream);
+        Ok((initial, rx_stream))
+    }
+
     /// Lookup a document by ID
     ///
     /// The [`Repo`] will first attempt to load the document from [`Storage`] and
@@ -542,40 +605,29 @@ impl Repo {
     /// If there are existing [`Dialer`]s which have not yet established a connection,
     /// but are not in the process of retrying or marked as failed then the future
     /// will wait for them to either establish a connection or fail before resolving.
+    ///
+    /// This is a convenience wrapper around [`Repo::search`] for the common
+    /// single-shot lookup case.
     pub fn find(
         &self,
         doc_id: DocumentId,
     ) -> impl Future<Output = Result<Option<DocHandle>, Stopped>> + 'static {
-        let mut inner = self.inner.lock().unwrap();
-        let DispatchedCommand { command_id, event } = HubEvent::find_document(doc_id);
-        let (tx, rx) = oneshot::channel();
-        inner.pending_commands.insert(command_id, tx);
-        inner.handle_event(event);
-        drop(inner);
-        let inner = self.inner.clone();
+        let search_result = self.search(doc_id);
         async move {
-            match rx.await {
-                Ok(r) => match r {
-                    CommandResult::FindDocument { actor_id, found } => {
-                        if found {
-                            // By this point the document should have been spawned
-                            let handle = inner
-                                .lock()
-                                .unwrap()
-                                .actors
-                                .get(&actor_id)
-                                .map(|ActorHandle { doc: handle, .. }| handle.clone())
-                                .expect("actor should exist");
-                            Ok(Some(handle))
-                        } else {
-                            Ok(None)
-                        }
+            let (initial, mut stream) = search_result?;
+            let mut state = initial;
+            loop {
+                match state {
+                    SearchState::Found(handle) => return Ok(Some(handle)),
+                    SearchState::Requesting(ref request) if request.is_currently_unavailable() => {
+                        return Ok(None);
                     }
-                    other => {
-                        panic!("unexpected command result for create: {other:?}");
-                    }
-                },
-                Err(_) => Err(Stopped),
+                    SearchState::Requesting(_) | SearchState::Loading => {}
+                }
+                match stream.next().await {
+                    Some(next) => state = next,
+                    None => return Err(Stopped),
+                }
             }
         }
     }
@@ -841,6 +893,7 @@ struct Inner {
     dialer_handles: HashMap<DialerId, DialerHandle>,
     acceptor_handles: HashMap<ListenerId, AcceptorHandle>,
     observer: Option<Arc<dyn observer::RepoObserver>>,
+    search_state_streams: HashMap<DocumentId, Vec<mpsc::UnboundedSender<SearchState>>>,
 }
 
 impl Inner {
@@ -899,6 +952,7 @@ impl Inner {
             event_type,
             connections_count,
             documents_count,
+            search_state_updates,
         } = self.hub.handle_event(&mut self.rng, now, event);
 
         for spawn_args in spawn_actors {
@@ -1071,6 +1125,31 @@ impl Inner {
             };
             if self.tx_io.unbounded_send(task).is_err() {
                 tracing::error!("IO loop channel closed, cannot dispatch dial request");
+            }
+        }
+
+        // Process search state updates — forward each update to any registered
+        // `Repo::search` subscribers for the document, mapping the core
+        // `DocSearch` into a `RepoSearchState::Found(handle)` when the document
+        // has transitioned to `Ready`.
+        for (doc_id, search_state) in search_state_updates {
+            let Some(senders) = self.search_state_streams.get_mut(&doc_id) else {
+                continue;
+            };
+            let Some(actor_id) = self.actors.iter().find_map(|(actor_id, actor)| {
+                if actor.doc.document_id() == &doc_id {
+                    Some(*actor_id)
+                } else {
+                    None
+                }
+            }) else {
+                tracing::warn!(?doc_id, "search state update for unknown document");
+                continue;
+            };
+            let state = search::SearchState::from_doc_search(search_state, actor_id, &self.actors);
+            senders.retain(|tx| tx.unbounded_send(state.clone()).is_ok());
+            if senders.is_empty() {
+                self.search_state_streams.remove(&doc_id);
             }
         }
 
@@ -1288,6 +1367,7 @@ impl TaskSetup {
             dialer_handles: HashMap::new(),
             acceptor_handles: HashMap::new(),
             observer: observer.clone(),
+            search_state_streams: HashMap::new(),
         }));
 
         TaskSetup {

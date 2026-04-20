@@ -28,8 +28,8 @@ pub(crate) enum Command {
     /// Creates a new document.
     CreateDocument { content: Box<Automerge> },
 
-    /// Finds and loads an existing document.
-    FindDocument { document_id: DocumentId },
+    /// Search for a document, receiving continuous state updates.
+    SearchForDoc { document_id: DocumentId },
 }
 
 impl std::fmt::Debug for Command {
@@ -48,8 +48,8 @@ impl std::fmt::Debug for Command {
                 .debug_struct("CreateDocument")
                 .field("content", &"<Automerge>")
                 .finish(),
-            Command::FindDocument { document_id } => f
-                .debug_struct("FindDocument")
+            Command::SearchForDoc { document_id } => f
+                .debug_struct("SearchForDoc")
                 .field("document_id", document_id)
                 .finish(),
         }

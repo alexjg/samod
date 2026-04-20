@@ -6,8 +6,8 @@ use std::{
 use automerge::Automerge;
 use rand::SeedableRng;
 use samod_core::{
-    CommandId, CommandResult, ConnectionId, DialerId, DocumentActorId, DocumentChanged, DocumentId,
-    ListenerId, PeerId, StorageId, StorageKey, UnixTimestamp,
+    CommandId, CommandResult, ConnectionId, DialerId, DocSearch, DocumentActorId, DocumentChanged,
+    DocumentId, ListenerId, PeerId, StorageId, StorageKey, UnixTimestamp,
     actors::{
         DocumentActor, DocumentError,
         hub::{
@@ -41,6 +41,10 @@ pub struct SamodWrapper {
     announce_policy: Box<dyn Fn(DocumentId, PeerId) -> bool>,
     /// A test listener ID used for incoming connections.
     test_listener_id: Option<ListenerId>,
+    /// Track the latest `DocSearch` per document as emitted by the hub.
+    /// The wrapper builds these from document actor status + dialer state,
+    /// exactly as a real wrapper would build them from the search stream.
+    latest_search_states: HashMap<DocumentId, DocSearch>,
 }
 
 impl SamodWrapper {
@@ -85,6 +89,7 @@ impl SamodWrapper {
             connection_events: Vec::new(),
             announce_policy: Box::new(|_, _| true),
             test_listener_id: None,
+            latest_search_states: HashMap::new(),
         }
     }
 
@@ -245,24 +250,24 @@ impl SamodWrapper {
         }
     }
 
-    pub fn start_find_document(&mut self, document_id: &DocumentId) -> CommandId {
-        let DispatchedCommand { command_id, event } = HubEvent::find_document(document_id.clone());
+    pub fn start_search_document(&mut self, document_id: &DocumentId) -> CommandId {
+        let DispatchedCommand { command_id, event } = HubEvent::search_for_doc(document_id.clone());
         self.inbox.push_back(event);
-        // self.handle_events();
         command_id
     }
 
-    pub fn check_find_document_result(
+    pub fn check_search_document_result(
         &mut self,
         command_id: CommandId,
-    ) -> Option<Option<DocumentActorId>> {
+    ) -> Option<DocumentActorId> {
         if let Some(completed_command) = self.completed_commands.remove(&command_id) {
             match completed_command {
-                CommandResult::FindDocument { found, actor_id } => {
-                    Some(if found { Some(actor_id) } else { None })
-                }
+                CommandResult::SearchForDoc {
+                    actor_id,
+                    search_state: _,
+                } => Some(actor_id),
                 _ => {
-                    panic!("Expected a FindDocument command result, but got {completed_command:?}")
+                    panic!("Expected a SearchForDoc command result, but got {completed_command:?}")
                 }
             }
         } else {
@@ -299,6 +304,13 @@ impl SamodWrapper {
             // Capture connection events
             for event in results.connection_events {
                 self.connection_events.push(event);
+            }
+
+            // Build DocSearch snapshots for documents whose state changed.
+            // The hub already built the DocSearch from document actor status +
+            // peer request states + dialer info.
+            for (doc_id, state) in results.search_state_updates {
+                self.latest_search_states.insert(doc_id, state);
             }
 
             // Handle IO tasks
@@ -417,7 +429,23 @@ impl SamodWrapper {
         self.document_actors
             .values()
             .find(|d| d.document_id() == doc_id)
-            .map(|d| d.actor().document())
+            .and_then(|d| {
+                if d.actor().is_document_ready() {
+                    Some(d.actor().document())
+                } else {
+                    None
+                }
+            })
+    }
+
+    /// Check if a document is available (has content).
+    ///
+    /// Returns true only if the document exists and has at least one change.
+    pub fn is_document_available(&self, doc_id: &DocumentId) -> bool {
+        match self.document(doc_id) {
+            Some(doc) => !doc.get_heads().is_empty(),
+            None => false,
+        }
     }
 
     pub fn with_document<F, R>(&mut self, doc_id: &DocumentId, f: F) -> Result<R, DocumentError>
@@ -432,6 +460,13 @@ impl SamodWrapper {
         let result = actor.with_document(self.now, f);
         self.handle_events();
         result
+    }
+
+    pub fn is_document_available_by_actor(&self, actor_id: DocumentActorId) -> bool {
+        self.document_actors
+            .get(&actor_id)
+            .map(|runner| !runner.actor().document().get_heads().is_empty())
+            .unwrap_or(false)
     }
 
     pub fn with_document_by_actor<F, R>(
@@ -538,7 +573,7 @@ impl SamodWrapper {
         runner.actor().peers()
     }
 
-    pub fn peer_state_changes(
+    pub fn peer_doc_state_changes(
         &self,
         doc_id: &DocumentId,
     ) -> &[HashMap<ConnectionId, PeerDocState>] {
@@ -550,5 +585,9 @@ impl SamodWrapper {
             return &[];
         };
         runner.peer_doc_state_changes()
+    }
+
+    pub fn search_status(&self, doc_id: &DocumentId) -> Option<&DocSearch> {
+        self.latest_search_states.get(doc_id)
     }
 }

@@ -16,9 +16,9 @@ fn basic_create_and_find_change() {
     // Create a document and get its IDs
     let RunningDocIds { doc_id, actor_id } = network.samod(&bob).create_document();
 
-    // Verify that find returns the same actor for the created document
-    let found_actor_id = network.samod(&bob).find_document(&doc_id);
-    assert_eq!(found_actor_id, Some(actor_id));
+    // Verify that search returns the same actor for the created document
+    let found_actor_id = network.samod(&bob).search_for_doc(&doc_id);
+    assert_eq!(found_actor_id, actor_id);
 
     // Test that we can access and modify the document
     network

@@ -1,5 +1,33 @@
 # Changelog
 
+> [!NOTE]
+> This is the changelog for the `samod` crate. For the `samod-core` crate look
+> in `./samod-core/CHANGELOG.md`
+
+## Unreleased
+
+### Added
+
+* Added `Repo::search`, which returns an initial `SearchState` and a stream of
+  subsequent search state updates for a document lookup. This lets applications
+  distinguish between loading from storage, requesting from peers, currently
+  unavailable, and found states. Importantly `Repo::search` continues notifying
+  even if the document is not found so that you can wait until someone does
+  have it (e.g. if you are waiting for a network connection to come up).
+* Added `SearchState` and peer request status reporting so callers can inspect
+  which connected peers have been requested, are syncing, are unavailable, or
+  have the document available.
+
+### Changed
+
+* `Repo::find` is now implemented as a convenience wrapper around `Repo::search`.
+  Its public API remains unchanged.
+
+### Fixed
+
+* Fixed a regression where `Repo::find` could hang instead of returning
+  `Ok(None)` after connected peers reported that a document was unavailable.
+
 ## 0.10.0 - 2026-05-15
 
 ### Breaking Changes
