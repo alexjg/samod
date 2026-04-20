@@ -1,10 +1,10 @@
-use crate::{DocumentActorId, DocumentId, actors::document::DocumentStatus};
+use crate::{DocumentActorId, DocumentId, doc_search::DocSearchPhase};
 
 #[derive(Debug, Clone)]
 pub(crate) struct ActorInfo {
     pub(crate) actor_id: DocumentActorId,
     pub(crate) document_id: DocumentId,
-    pub(crate) status: DocumentStatus,
+    pub(crate) search_phase: DocSearchPhase,
 }
 
 impl ActorInfo {
@@ -12,7 +12,7 @@ impl ActorInfo {
         Self {
             actor_id,
             document_id,
-            status: DocumentStatus::Spawned,
+            search_phase: DocSearchPhase::Loading,
         }
     }
 }

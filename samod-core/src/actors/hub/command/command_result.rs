@@ -1,4 +1,4 @@
-use crate::{ConnectionId, DialerId, DocumentActorId, DocumentId, ListenerId};
+use crate::{ConnectionId, DialerId, DocSearch, DocumentActorId, DocumentId, ListenerId};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CommandResult {
@@ -20,10 +20,14 @@ pub enum CommandResult {
         actor_id: DocumentActorId,
         document_id: DocumentId,
     },
-    /// Result of FindDocument command.
-    FindDocument {
+    /// Result of SearchForDoc command.
+    ///
+    /// Provides the actor ID plus a synchronous snapshot of the document's
+    /// current search state. Subsequent state changes are delivered via
+    /// [`HubResults::search_state_updates`](crate::actors::hub::HubResults::search_state_updates).
+    SearchForDoc {
         actor_id: DocumentActorId,
-        found: bool,
+        search_state: DocSearch,
     },
     /// Result of AddDialer command.
     AddDialer {

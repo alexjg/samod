@@ -70,9 +70,9 @@ impl HubEvent {
         })
     }
 
-    /// Creates a command to find and load an existing document.
-    pub fn find_document(document_id: DocumentId) -> DispatchedCommand {
-        Self::dispatch_command(Command::FindDocument { document_id })
+    /// Creates a command to search for an existing document.
+    pub fn search_for_doc(document_id: DocumentId) -> DispatchedCommand {
+        Self::dispatch_command(Command::SearchForDoc { document_id })
     }
 
     /// Creates an event indicating that a network connection has been lost externally.
@@ -202,7 +202,7 @@ impl HubEvent {
                     Command::Receive { .. } => "receive",
                     Command::ActorReady { .. } => "actor_ready",
                     Command::CreateDocument { .. } => "create_document",
-                    Command::FindDocument { .. } => "find_document",
+                    Command::SearchForDoc { .. } => "search_for_doc",
                 },
                 HubInput::Tick => "tick",
                 HubInput::ActorMessage { .. } => "actor_message",

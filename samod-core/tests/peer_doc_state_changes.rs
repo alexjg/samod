@@ -1,7 +1,14 @@
 use samod_test_harness::{Connected, Network, RunningDocIds};
 
+fn init_logging() {
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .try_init();
+}
+
 #[test]
 fn peer_doc_state_changes_emitted_on_sync() {
+    init_logging();
     let mut network = Network::new();
 
     let alice = network.create_samod("alice");
@@ -22,7 +29,12 @@ fn peer_doc_state_changes_emitted_on_sync() {
     network.run_until_quiescent();
 
     let mut changes_on_alice = network.samod(&alice).peer_state_changes(&doc_id).to_vec();
-    assert!(!changes_on_alice.is_empty());
+    // we should have at least one changes where the shared heads are equal to the local heads
+    assert!(
+        !changes_on_alice.is_empty(),
+        "expected at least one change, got {}",
+        changes_on_alice.len()
+    );
 
     let last_changes = changes_on_alice.pop().unwrap();
     let last_bob_changes = last_changes

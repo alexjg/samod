@@ -1,6 +1,8 @@
 use automerge::{AutomergeError, ROOT, ReadDoc, transaction::Transactable};
-use samod_core::network::ConnectionEvent;
-use samod_test_harness::{Network, RunningDocIds};
+use samod_core::{
+    BackoffConfig, DialerConfig, DocSearchPhase, PeerRequestState, network::ConnectionEvent,
+};
+use samod_test_harness::{Connected, Network, RunningDocIds};
 
 fn init_logging() {
     let _ = tracing_subscriber::fmt()
@@ -469,7 +471,7 @@ fn sync_while_requesting() {
     // alice <-> bob <-> charlie <-> derek
     //
     // Alice is configured to announce everything to bob. The scenario this
-    // tests exercises is when Alice creates a document and Derek queries
+    // tests exercises is when Alice creates a document and Derek searches
     // for it before the sync from Alice to Bob to Charlie has completed. There
     // was a bug where the request handling logic meant that Derek would not
     // find the document. The buggy request logic was something like this:
@@ -505,15 +507,14 @@ fn sync_while_requesting() {
     // Create the document on alice
     let RunningDocIds { doc_id, .. } = network.samod(&alice).create_document();
 
-    let find_command = network.samod(&derek).begin_find_document(&doc_id);
+    network.samod(&derek).search_for_doc(&doc_id);
 
     network.run_until_quiescent();
 
-    let _ = network
-        .samod(&derek)
-        .check_find_document_result(find_command)
-        .expect("error running find command")
-        .expect("derek should have the doc");
+    assert!(
+        network.samod(&derek).is_document_available(&doc_id),
+        "document should eventually be available on derek"
+    )
 }
 
 #[test]
@@ -548,15 +549,14 @@ fn create_while_connected() {
         .run_until_message_received_at(alice_peer_id, bob_peer_id)
         .unwrap();
 
-    let find_command = network.samod(&bob).begin_find_document(&doc_id);
+    network.samod(&bob).search_for_doc(&doc_id);
 
     network.run_until_quiescent();
 
-    let _ = network
-        .samod(&bob)
-        .check_find_document_result(find_command)
-        .expect("error running find command")
-        .expect("bob should have the doc");
+    assert!(
+        network.samod(&bob).is_document_available(&doc_id),
+        "bob should have the doc"
+    );
 }
 
 #[test]
@@ -736,22 +736,172 @@ fn find_doesnt_bounce_through_unavailable_when_receiving_doc() {
             .unwrap()
         })
         .unwrap();
-    let find_command = network.samod(&server).begin_find_document(&doc_id);
+    network.samod(&server).search_for_doc(&doc_id);
 
     network.samod(&server).pause_storage();
-    assert!(
-        network
-            .samod(&server)
-            .check_find_document_result(find_command)
-            .is_none()
-    );
+    assert!(!network.samod(&server).is_document_available(&doc_id));
     network.run_until_quiescent();
     network.samod(&server).resume_storage();
     network.run_until_quiescent();
 
+    assert!(
+        network.samod(&server).is_document_available(&doc_id),
+        "document should be found on server"
+    );
+}
+
+#[test]
+fn search_status_from_requesting_to_ready() {
+    init_logging();
+
+    let mut network = Network::new();
+
+    // Create three peers: Alice, Bob, and Charlie
+    let alice = network.create_samod("Alice");
     network
-        .samod(&server)
-        .check_find_document_result(find_command)
-        .expect("find command should have completed")
-        .expect("document should be found on server");
+        .samod(&alice)
+        .set_announce_policy(Box::new(|_, _| false));
+    let bob = network.create_samod("Bob");
+    let charlie = network.create_samod("Charlie");
+
+    // Connect them in a chain: Alice <-> Bob <-> Charlie
+    let Connected {
+        left: _,
+        right: alice_from_bob,
+    } = network.connect(alice, bob);
+    let Connected {
+        left: charlie_from_bob,
+        right: _,
+    } = network.connect(bob, charlie);
+
+    network.run_until_quiescent();
+
+    // Create a document on Alice
+    let doc_id = network.samod(&alice).create_document().doc_id;
+    network
+        .samod(&alice)
+        .with_document(&doc_id, |doc| {
+            doc.transact::<_, _, AutomergeError>(|tx| {
+                tx.put(automerge::ROOT, "foo", "bar")?;
+                Ok(())
+            })
+            .unwrap();
+        })
+        .unwrap();
+
+    network.run_until_quiescent();
+
+    // Begin requesting the document from bob
+    network.samod(&bob).search_for_doc(&doc_id);
+
+    // The document should be in a searching state now because [`search_for_doc`] handles the
+    // local storage events but doesn't run the network.
+    let DocSearchPhase::Searching(peer_states) = network
+        .samod(&bob)
+        .search_status(&doc_id)
+        .expect("there should be a search state")
+        .phase()
+        .clone()
+    else {
+        panic!("document should be in searching state");
+    };
+    println!("{:?}", peer_states);
+    assert_eq!(
+        peer_states.len(),
+        2,
+        "peer states should show both peers as requesting"
+    );
+    assert_eq!(
+        peer_states
+            .get(&alice_from_bob)
+            .expect("alice should be in bobs peer states"),
+        &PeerRequestState::Requested,
+        "alice should be in requested state"
+    );
+    assert_eq!(
+        peer_states
+            .get(&charlie_from_bob)
+            .expect("charlie should be in bobs peer states"),
+        &PeerRequestState::Requested,
+        "charlie should be in requested state"
+    );
+    assert!(
+        !network
+            .samod(&bob)
+            .search_status(&doc_id)
+            .unwrap()
+            .is_currently_unavailable(),
+        "document should not be currently unavailable whilst we're requesting"
+    );
+
+    network.run_until_quiescent();
+
+    // The document should be in a synced state now that the network has run.
+    let DocSearchPhase::Ready = network
+        .samod(&bob)
+        .search_status(&doc_id)
+        .expect("there should be a search state")
+        .phase()
+        .clone()
+    else {
+        panic!("document should be in synced state");
+    };
+}
+
+#[test]
+fn search_state_not_found_if_no_one_has_doc() {
+    init_logging();
+
+    let mut network = Network::new();
+
+    // Create three peers: Alice, Bob, and Charlie
+    let alice = network.create_samod("Alice");
+    let bob = network.create_samod("Bob");
+
+    let RunningDocIds { doc_id, .. } = network.samod(&alice).create_document();
+
+    network.samod(&bob).search_for_doc(&doc_id);
+
+    network.run_until_quiescent();
+
+    assert!(
+        network
+            .samod(&bob)
+            .search_status(&doc_id)
+            .expect("search state should be found")
+            .is_currently_unavailable(),
+        "search should be in a not currently available state if no one has the document"
+    );
+}
+
+#[test]
+fn search_state_not_unavailable_after_dialer_added() {
+    init_logging();
+
+    let mut network = Network::new();
+
+    // Create three peers: Alice, Bob, and Charlie
+    let alice = network.create_samod("Alice");
+    let bob = network.create_samod("Bob");
+
+    let RunningDocIds { doc_id, .. } = network.samod(&alice).create_document();
+
+    network.samod(&bob).search_for_doc(&doc_id);
+
+    network.run_until_quiescent();
+
+    // Now add a dialer to bob
+    network.samod(&bob).add_dialer(DialerConfig {
+        url: url::Url::parse("wss://sync.example.com/automerge").unwrap(),
+        backoff: BackoffConfig::default(),
+    });
+
+    assert!(
+        !network
+            .samod(&bob)
+            .search_status(&doc_id)
+            .expect("search state should be found")
+            .is_currently_unavailable(),
+        "search should not be in a currently unavailable state if a dialer is still connecting"
+    );
 }

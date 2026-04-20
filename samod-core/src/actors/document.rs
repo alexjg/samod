@@ -32,8 +32,6 @@ pub use doc_actor_result::DocActorResult;
 mod sync_message_stat;
 pub use sync_message_stat::{SyncDirection, SyncMessageStat};
 mod document_actor_id;
-mod document_status;
-pub(crate) use document_status::DocumentStatus;
 pub mod errors;
 pub mod io;
 mod load;
@@ -47,7 +45,6 @@ pub use with_doc_result::WithDocResult;
 
 // Internal modules for async runtime
 mod actor_input;
-mod doc_state;
 pub(crate) use actor_input::ActorInput;
 
 pub use document_actor::DocumentActor;

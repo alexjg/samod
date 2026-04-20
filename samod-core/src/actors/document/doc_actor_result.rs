@@ -6,9 +6,10 @@ use crate::{
     ConnectionId, DocumentChanged, DocumentId, PeerId, StorageKey,
     actors::{
         DocToHubMsg,
-        document::{DocumentStatus, SyncMessageStat, io::DocumentIoTask},
+        document::{SyncMessageStat, io::DocumentIoTask},
         messages::{Broadcast, DocToHubMsgPayload, SyncMessage},
     },
+    doc_search::DocSearchPhase,
     io::{IoTask, IoTaskId, StorageTask},
     network::PeerDocState,
 };
@@ -85,33 +86,26 @@ impl DocActorResult {
             .push(DocToHubMsg(DocToHubMsgPayload::Terminated));
     }
 
-    pub(crate) fn send_peer_states_changes(
+    pub(crate) fn update_search_state(&mut self, new_search_state: DocSearchPhase) {
+        self.outgoing_messages
+            .retain(|msg| !matches!(msg.0, DocToHubMsgPayload::DocSearchChanged(_)));
+        self.outgoing_messages
+            .push(DocToHubMsg(DocToHubMsgPayload::DocSearchChanged(
+                new_search_state,
+            )));
+    }
+
+    pub(crate) fn emit_peer_state_changes(
         &mut self,
         new_states: HashMap<ConnectionId, PeerDocState>,
     ) {
-        // Remove previous peer state change messages as they are redundant
         self.outgoing_messages
-            .retain(|m| !matches!(m.0, DocToHubMsgPayload::PeerStatesChanged { .. }));
+            .retain(|msg| !matches!(msg.0, DocToHubMsgPayload::PeerStatesChanged(_)));
         self.outgoing_messages
-            .push(DocToHubMsg(DocToHubMsgPayload::PeerStatesChanged {
-                new_states,
-            }));
-    }
-
-    pub(crate) fn send_doc_status_update(&mut self, new_status: DocumentStatus) {
-        // remove any existing doc status update so that if the document status changes
-        // multiple times during a turn, only the latest status is sent to the hub.
-        // This is especially important to avoid bouncing through a NotFound state
-        // when loading a document as that will cause any outstanding find commands
-        // to fail even if the document loads successfully in this turn (as it might
-        // if we finish loading after receiving a sync message with the document
-        // content).
-        self.outgoing_messages
-            .retain(|m| !matches!(m.0, DocToHubMsgPayload::DocumentStatusChanged { .. }));
-        self.outgoing_messages
-            .push(DocToHubMsg(DocToHubMsgPayload::DocumentStatusChanged {
-                new_status,
-            }));
+            .push(DocToHubMsg(DocToHubMsgPayload::PeerStatesChanged(
+                new_states.clone(),
+            )));
+        self.peer_state_changes = new_states;
     }
 
     pub(crate) fn put(&mut self, key: StorageKey, value: Vec<u8>) -> IoTaskId {

@@ -1,12 +1,6 @@
-use std::collections::HashMap;
-
 use url::Url;
 
-use crate::{
-    ConnectionId, DialerId, UnixTimestamp,
-    actors::{hub::connection::Connection, messages::DocDialerState},
-    network::BackoffConfig,
-};
+use crate::{ConnectionId, DialerId, UnixTimestamp, network::BackoffConfig};
 
 /// Internal state for a dialer tracked by the hub.
 ///
@@ -24,7 +18,7 @@ pub(crate) struct DialerState {
 }
 
 /// The status of a dialer.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum DialerStatus {
     /// We need the IO layer to establish a transport.
     NeedTransport,
@@ -150,26 +144,6 @@ impl DialerState {
             Some(*connection_id)
         } else {
             None
-        }
-    }
-
-    /// Project the internal dialer status to the simplified state visible to
-    /// document actors.
-    pub(crate) fn to_doc_state(&self, conns: &HashMap<ConnectionId, Connection>) -> DocDialerState {
-        match &self.status {
-            DialerStatus::NeedTransport | DialerStatus::TransportPending => {
-                DocDialerState::Connecting
-            }
-            DialerStatus::Connected { connection_id } => {
-                // We only return Connected if the connection is actually established
-                if let Some(_peer_id) = conns.get(connection_id).and_then(|c| c.remote_peer_id()) {
-                    DocDialerState::Connected
-                } else {
-                    DocDialerState::Connecting
-                }
-            }
-            DialerStatus::WaitingToRetry { .. } => DocDialerState::WaitingToRetry,
-            DialerStatus::Failed => DocDialerState::Failed,
         }
     }
 }
