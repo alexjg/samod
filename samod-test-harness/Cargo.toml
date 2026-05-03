@@ -5,7 +5,7 @@ edition = "2024"
 
 [dependencies]
 automerge = { workspace = true }
-rand = "0.9.1"
+rand = { workspace = true }
 samod-core = { path = "../samod-core" }
 tracing = "0.1.41"
 url = "2.5"
