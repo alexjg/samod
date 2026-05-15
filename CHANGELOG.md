@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+### Breaking Changes
+
+* Updated to `automerge@0.9.0`
+
+### Fixed
+
+* A bug which causes sync time to increase exponentially with the total number
+  of connections since samod started
+
 ## 0.9.0 - 2026-03-25
 
 ### Breaking Changes
