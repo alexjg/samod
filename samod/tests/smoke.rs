@@ -663,3 +663,117 @@ async fn when_connected_multiple_waiters_same_peer() {
     alice.stop().await;
     bob.stop().await;
 }
+
+#[tokio::test]
+async fn search_stream_emits_found_after_sync() {
+    use futures::StreamExt as _;
+    use samod::SearchState;
+
+    init_logging();
+
+    let alice = Repo::build_tokio()
+        .with_peer_id(PeerId::from("alice"))
+        .load()
+        .await;
+
+    let bob = Repo::build_tokio()
+        .with_peer_id(PeerId::from("bob"))
+        .load()
+        .await;
+
+    // Create the document on alice BEFORE connecting so we can observe bob
+    // walking through the Loading / Searching phases before finding it.
+    let alice_handle = alice.create(Automerge::new()).await.unwrap();
+    let doc_id = alice_handle.document_id().clone();
+
+    // The initial snapshot should be loading because bob has never seen
+    // this document and has no connected peers.
+    let (initial, mut stream) = bob.search(doc_id.clone()).unwrap();
+    assert!(matches!(initial, SearchState::Loading));
+
+    // Connect the two repos; bob should eventually sync the doc from alice.
+    let _connected = tincans::connect_repos(&alice, &bob).await;
+
+    let found_handle = loop {
+        let next = tokio::time::timeout(Duration::from_secs(5), stream.next())
+            .await
+            .expect("search stream stalled")
+            .expect("search stream ended early");
+        if let SearchState::Found(handle) = next {
+            break handle;
+        }
+    };
+    assert_eq!(found_handle.document_id(), &doc_id);
+
+    alice.stop().await;
+    bob.stop().await;
+}
+
+#[tokio::test]
+async fn search_returns_found_synchronously_for_local_doc() {
+    use samod::SearchState;
+
+    init_logging();
+
+    let alice = Repo::build_tokio()
+        .with_peer_id(PeerId::from("alice"))
+        .load()
+        .await;
+
+    let alice_handle = alice.create(Automerge::new()).await.unwrap();
+
+    // Immediately searching for a local doc should return Found without any
+    // waiting on the stream.
+    let (initial, _stream) = alice.search(alice_handle.document_id().clone()).unwrap();
+    match initial {
+        SearchState::Found(handle) => {
+            assert_eq!(handle.document_id(), alice_handle.document_id());
+        }
+        SearchState::Requesting(_) | SearchState::Loading => {
+            panic!("locally-created doc should be Found immediately")
+        }
+    }
+
+    alice.stop().await;
+}
+
+#[tokio::test]
+async fn query_stream_reports_unavailable_without_peers() {
+    use samod::{DocumentId, SearchState};
+
+    init_logging();
+
+    let bob = Repo::build_tokio()
+        .with_peer_id(PeerId::from("bob"))
+        .load()
+        .await;
+
+    // Random doc id that bob has never heard of.
+    let fake_doc_id = DocumentId::new(&mut rand::rng());
+
+    let (initial, mut stream) = bob.search(fake_doc_id).unwrap();
+
+    // Bob has no connected peers or dialers, so either the initial state or
+    // a very-early stream item should report unavailable.
+    let unavailable = if let SearchState::Requesting(q) = &initial
+        && q.is_currently_unavailable()
+    {
+        q.clone()
+    } else {
+        use futures::StreamExt as _;
+        loop {
+            let next = tokio::time::timeout(Duration::from_secs(5), stream.next())
+                .await
+                .expect("search stream stalled")
+                .expect("search stream ended early");
+            match next {
+                SearchState::Requesting(q) if q.is_currently_unavailable() => break q,
+                SearchState::Requesting(_) | SearchState::Loading => continue,
+                SearchState::Found(_) => panic!("should not find a random document"),
+            }
+        }
+    };
+    assert!(unavailable.is_currently_unavailable());
+
+    bob.stop().await;
+}

@@ -1,9 +1,6 @@
 use std::collections::HashMap;
 
-use crate::{
-    ConnectionId, DialerId, DocumentActorId, PeerId,
-    actors::messages::{DocDialerState, DocMessage},
-};
+use crate::{ConnectionId, DocumentActorId, PeerId, actors::messages::DocMessage};
 
 #[derive(Clone)]
 pub struct SpawnArgs {
@@ -12,9 +9,6 @@ pub struct SpawnArgs {
     pub(crate) document_id: crate::DocumentId,
     pub(crate) initial_content: Option<automerge::Automerge>,
     pub(crate) initial_connections: HashMap<ConnectionId, (PeerId, Option<DocMessage>)>,
-    /// Current dialer states at spawn time, so the document actor can factor
-    /// connecting dialers into its availability decisions from the start.
-    pub(crate) dialer_states: HashMap<DialerId, DocDialerState>,
 }
 
 impl std::fmt::Debug for SpawnArgs {
