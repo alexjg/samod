@@ -39,7 +39,7 @@ impl PeerDocConnection {
             sync_state: sync::State::new(),
             has_requested: false,
             state: PeerDocState::empty(),
-            dirty: true,
+            dirty: false,
             announce_policy: AnnouncePolicy::Unknown,
         }
     }
@@ -115,9 +115,6 @@ impl PeerDocConnection {
     }
 
     pub(super) fn set_announce_policy(&mut self, policy: AnnouncePolicy) {
-        if policy != self.announce_policy {
-            self.dirty = true;
-        }
         self.announce_policy = policy;
     }
 }
