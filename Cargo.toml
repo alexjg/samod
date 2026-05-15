@@ -4,4 +4,4 @@ resolver = "3"
 members = [ "samod","samod-core", "samod-test-harness"]
 
 [workspace.dependencies]
-automerge = "0.8.0"
+automerge = "0.9.0"
