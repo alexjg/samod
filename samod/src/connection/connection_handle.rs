@@ -34,7 +34,6 @@ use crate::{
 #[derive(Clone)]
 pub struct ConnectionHandle {
     id: ConnectionId,
-    tx: UnboundedSender<Vec<u8>>,
     inner: Arc<RwLock<Inner>>,
 }
 
@@ -45,6 +44,7 @@ struct Inner {
     event_listeners: Vec<unbounded::UnboundedSender<AcceptorEvent>>,
     finished_reason: Option<ConnFinishedReason>,
     rx: Option<UnboundedReceiver<Vec<u8>>>,
+    tx: Option<UnboundedSender<Vec<u8>>>,
 }
 
 impl ConnectionHandle {
@@ -52,7 +52,6 @@ impl ConnectionHandle {
         let (tx, rx) = unbounded::channel();
         Self {
             id,
-            tx,
             inner: Arc::new(RwLock::new(Inner {
                 info: None,
                 handshake_listeners: Vec::new(),
@@ -60,6 +59,7 @@ impl ConnectionHandle {
                 event_listeners: Vec::new(),
                 finished_reason: None,
                 rx: Some(rx),
+                tx: Some(tx),
             })),
         }
     }
@@ -85,7 +85,18 @@ impl ConnectionHandle {
     // Called in Inner::handle_event whenever there are outbound messages to send
     // The other end of the channel is owned by the io loop
     pub(crate) fn send(&self, msg: Vec<u8>) {
-        let _ = self.tx.unbounded_send(msg);
+        let inner = Self::read(&self.inner);
+        if let Some(tx) = inner.tx.as_ref() {
+            let _ = tx.unbounded_send(msg);
+        }
+    }
+
+    /// Drop the outbound sender so the IO loop's `drive_connection` sees its
+    /// outbound channel close and breaks out of its select loop with
+    /// `WeDisconnected`.
+    pub(crate) fn close(&self) {
+        let mut inner = Self::write(&self.inner);
+        inner.tx = None;
     }
 
     /// A future which completes either when the handshake completes, or the

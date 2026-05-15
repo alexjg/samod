@@ -340,7 +340,9 @@ impl State {
             if let Some(connection) = self.connections.get_mut(&conn) {
                 connection.update_peer_state(&actor.document_id, new_state);
             } else {
-                tracing::warn!(?conn, "connection not found when updating peer states");
+                // This can happen in benign situations such as the peer disconnecting
+                // whilst the document actor generates a message for the peer
+                tracing::debug!(?conn, "connection not found when updating peer states");
             }
         }
     }
