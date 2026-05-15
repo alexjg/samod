@@ -119,21 +119,18 @@ impl WireMessage {
                     }
                     fields.insert(key, FieldValue::StringArray(strings));
                 }
-                "add" | "remove" => {
+                "add" | "remove"
                     // These fields may be undefined/null when sent by JS clients
                     // (e.g. `remove: undefined` in a subscribe-only message), so we
                     // need to check the CBOR type before attempting to decode as array.
-                    if decoder.probe().array().is_ok() {
+                    if decoder.probe().array().is_ok() => {
                         let array_len = decoder.array()?.ok_or(DecodeError::InvalidFormat)?;
                         let mut strings = Vec::new();
                         for _ in 0..array_len {
                             strings.push(decoder.str()?.to_string());
                         }
                         fields.insert(key, FieldValue::StringArray(strings));
-                    } else {
-                        decoder.skip()?;
                     }
-                }
                 "data" => {
                     fields.insert(key, FieldValue::Bytes(decoder.bytes()?.to_vec()));
                 }

@@ -261,11 +261,10 @@ impl Request {
                     }
                     _ => {}
                 },
-                Requesting::NotSentDueToAnnouncePolicy => {
-                    if policy == AnnouncePolicy::Announce {
+                Requesting::NotSentDueToAnnouncePolicy
+                    if policy == AnnouncePolicy::Announce => {
                         peer.state = PeerState::Requesting(Requesting::AwaitingSend);
                     }
-                }
                 _ => {}
             }
         }
