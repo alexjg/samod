@@ -934,11 +934,16 @@ impl Inner {
                     }
                 }
                 HubIoAction::Disconnect { connection_id } => {
-                    if self.connections.remove(&connection_id).is_none() {
-                        tracing::warn!(
-                            "Tried to disconnect unknown connection: {:?}",
-                            connection_id
-                        );
+                    match self.connections.remove(&connection_id) {
+                        Some(conn_handle) => {
+                            conn_handle.close();
+                        }
+                        None => {
+                            tracing::warn!(
+                                "Tried to disconnect unknown connection: {:?}",
+                                connection_id
+                            );
+                        }
                     }
                 }
             }
@@ -996,10 +1001,10 @@ impl Inner {
                     owner,
                     error,
                 } => {
-                    tracing::error!(
+                    tracing::debug!(
                         ?connection_id,
                         ?error,
-                        "connection failed, notifying waiting tasks",
+                        "connection closed, notifying waiting tasks",
                     );
 
                     if let Some(ref obs) = self.observer {
