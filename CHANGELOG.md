@@ -4,7 +4,13 @@
 > This is the changelog for the `samod` crate. For the `samod-core` crate look
 > in `./samod-core/CHANGELOG.md`
 
-## Unreleased
+## 0.11.0 - 2026-06-04
+
+### Breaking Changes
+
+The only breaking change here is that the `samod-core` crate has updated to
+0.11.0. This doesn't change the API for `samod` really but we do re-export
+some `samod-core` types and so it is a breaking change.
 
 ### Added
 
