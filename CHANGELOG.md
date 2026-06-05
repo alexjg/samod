@@ -4,7 +4,7 @@
 > This is the changelog for the `samod` crate. For the `samod-core` crate look
 > in `./samod-core/CHANGELOG.md`
 
-## Unreleased
+## 0.12.0 - 2026-06-05
 
 ### Breaking Changes
 
