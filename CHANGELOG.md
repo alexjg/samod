@@ -4,6 +4,12 @@
 > This is the changelog for the `samod` crate. For the `samod-core` crate look
 > in `./samod-core/CHANGELOG.md`
 
+## Unreleased
+
+### Breaking Changes
+
+* Updated to `automerge@0.10.0`.
+
 ## 0.11.0 - 2026-06-04
 
 ### Breaking Changes
