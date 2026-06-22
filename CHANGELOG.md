@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+* `DocHandle::{changes, ephemeral}` now return streams with a `'static`
+   lifetime
+
 > [!NOTE]
 > This is the changelog for the `samod` crate. For the `samod-core` crate look
 > in `./samod-core/CHANGELOG.md`

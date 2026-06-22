@@ -76,12 +76,12 @@ impl DocHandle {
     }
 
     /// Listen to ephemeral messages sent by other peers to this document
-    pub fn ephemera(&self) -> impl Stream<Item = Vec<u8>> {
+    pub fn ephemera(&self) -> impl Stream<Item = Vec<u8>> + 'static {
         self.inner.lock().unwrap().create_ephemera_listener()
     }
 
     /// Listen for changes to the document
-    pub fn changes(&self) -> impl Stream<Item = DocumentChanged> {
+    pub fn changes(&self) -> impl Stream<Item = DocumentChanged> + 'static {
         self.inner.lock().unwrap().create_change_listener()
     }
 
