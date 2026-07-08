@@ -205,6 +205,10 @@ impl DocActorInner {
             ActorTask::IoComplete(io_result) => self
                 .actor
                 .handle_io_complete(UnixTimestamp::now(), io_result),
+            ActorTask::WithDocument(f) => {
+                f(self);
+                return;
+            }
         };
         self.handle_results(result.unwrap());
     }

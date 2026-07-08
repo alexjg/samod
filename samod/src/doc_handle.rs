@@ -4,10 +4,13 @@ use std::{
 };
 
 use automerge::{Automerge, ReadDoc};
-use futures::{Stream, StreamExt};
+use futures::{Stream, StreamExt, channel::oneshot};
 use samod_core::{AutomergeUrl, DocumentChanged, DocumentId};
 
-use crate::{ConnectionId, doc_actor_inner::DocActorInner, peer_connection_info::PeerDocState};
+use crate::{
+    ConnectionId, Stopped, actor_task::ActorTask, doc_actor_inner::DocActorInner,
+    peer_connection_info::PeerDocState, unbounded::UnboundedSender,
+};
 
 /// The state of a single [`automerge`] document the [`Repo`](crate::Repo) is managing
 ///
@@ -28,6 +31,34 @@ use crate::{ConnectionId, doc_actor_inner::DocActorInner, peer_connection_info::
 pub struct DocHandle {
     inner: Arc<Mutex<DocActorInner>>,
     document_id: DocumentId,
+    task_dispatcher: DocTaskDispatcher,
+}
+
+#[derive(Clone)]
+pub(crate) enum DocTaskDispatcher {
+    Async(UnboundedSender<ActorTask>),
+    #[cfg(feature = "threadpool")]
+    Threadpool(Arc<rayon::ThreadPool>),
+}
+
+impl DocTaskDispatcher {
+    fn dispatch(
+        &self,
+        _inner: Arc<Mutex<DocActorInner>>,
+        task: ActorTask,
+    ) -> Result<(), ActorTask> {
+        match self {
+            DocTaskDispatcher::Async(tx) => tx.unbounded_send(task),
+            #[cfg(feature = "threadpool")]
+            DocTaskDispatcher::Threadpool(threadpool) => {
+                threadpool.spawn(move || {
+                    let mut guard = _inner.lock().unwrap();
+                    guard.handle_task(task);
+                });
+                Ok(())
+            }
+        }
+    }
 }
 
 impl std::fmt::Debug for DocHandle {
@@ -39,10 +70,15 @@ impl std::fmt::Debug for DocHandle {
 }
 
 impl DocHandle {
-    pub(crate) fn new(doc_id: DocumentId, inner: Arc<Mutex<DocActorInner>>) -> Self {
+    pub(crate) fn new(
+        doc_id: DocumentId,
+        inner: Arc<Mutex<DocActorInner>>,
+        task_dispatcher: DocTaskDispatcher,
+    ) -> Self {
         Self {
             document_id: doc_id,
             inner,
+            task_dispatcher,
         }
     }
 
@@ -73,6 +109,37 @@ impl DocHandle {
         F: FnOnce(&mut Automerge) -> R,
     {
         self.inner.lock().unwrap().with_document(f)
+    }
+
+    /// Make a change to the underlying `automerge::Automerge` document without
+    /// blocking the calling task.
+    ///
+    /// This queues the work on the document actor and resolves when the actor
+    /// has applied the change. If you created this repo using
+    /// [`ConcurrencyConfig::ThreadPool`] then the closure runs on the
+    /// threadpool and doesn't block the current async task. Otherwise, the
+    /// closure runs in the document actor task, so long-running closures can
+    /// still occupy an executor worker; use threadpool concurrency for
+    /// CPU-heavy document work.
+    pub fn with_document_async<F, R>(
+        &self,
+        f: F,
+    ) -> impl Future<Output = Result<R, Stopped>> + Send + 'static
+    where
+        F: FnOnce(&mut Automerge) -> R + Send + 'static,
+        R: Send + 'static,
+    {
+        let inner = self.inner.clone();
+        let dispatcher = self.task_dispatcher.clone();
+        async move {
+            let (tx, rx) = oneshot::channel();
+            let task = ActorTask::WithDocument(Box::new(move |inner| {
+                let result = inner.with_document(f);
+                let _ = tx.send(result);
+            }));
+            dispatcher.dispatch(inner, task).map_err(|_| Stopped)?;
+            rx.await.map_err(|_| Stopped)
+        }
     }
 
     /// Listen to ephemeral messages sent by other peers to this document

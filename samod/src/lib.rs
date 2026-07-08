@@ -1205,18 +1205,22 @@ impl Inner {
             self.tx_io.clone(),
             self.observer.clone(),
         )));
-        let handle = DocHandle::new(doc_id.clone(), doc_inner.clone());
-        self.actors.insert(
-            actor_id,
-            ActorHandle {
-                inner: doc_inner.clone(),
-                doc: handle,
-            },
-        );
-
         match &mut self.doc_runner {
             #[cfg(feature = "threadpool")]
-            DocRunner::Threadpool(_threadpool) => {
+            DocRunner::Threadpool(threadpool) => {
+                let handle = DocHandle::new(
+                    doc_id.clone(),
+                    doc_inner.clone(),
+                    doc_handle::DocTaskDispatcher::Threadpool(threadpool.clone()),
+                );
+                self.actors.insert(
+                    actor_id,
+                    ActorHandle {
+                        inner: doc_inner.clone(),
+                        doc: handle,
+                    },
+                );
+
                 // In threadpool mode, we process init_results synchronously and then
                 // dispatch subsequent tasks via dispatch_task() which spawns them
                 // directly on the threadpool. This avoids dedicating one thread per
@@ -1229,7 +1233,20 @@ impl Inner {
             } => {
                 // Create channel for this actor and store the sender
                 let (tx, rx) = unbounded::channel();
-                task_senders.insert(actor_id, tx);
+                task_senders.insert(actor_id, tx.clone());
+
+                let handle = DocHandle::new(
+                    doc_id.clone(),
+                    doc_inner.clone(),
+                    doc_handle::DocTaskDispatcher::Async(tx),
+                );
+                self.actors.insert(
+                    actor_id,
+                    ActorHandle {
+                        inner: doc_inner.clone(),
+                        doc: handle,
+                    },
+                );
 
                 if tx_spawn
                     .unbounded_send(SpawnedActor {
@@ -1338,7 +1355,7 @@ impl TaskSetup {
             #[cfg(feature = "threadpool")]
             ConcurrencyConfig::Threadpool(threadpool) => {
                 rx_actor = None;
-                DocRunner::Threadpool(threadpool)
+                DocRunner::Threadpool(Arc::new(threadpool))
             }
             ConcurrencyConfig::AsyncRuntime => {
                 let (tx, rx) = unbounded::channel();

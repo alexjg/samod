@@ -40,6 +40,32 @@ async fn smoke() {
 }
 
 #[tokio::test]
+async fn with_document_async_smoke() {
+    init_logging();
+    let samod = Repo::build_tokio().load().await;
+
+    let doc = samod.create(Automerge::new()).await.unwrap();
+    let heads = doc
+        .with_document_async(|am| {
+            use automerge::{AutomergeError, ROOT};
+
+            am.transact::<_, _, AutomergeError>(|tx| {
+                use automerge::transaction::Transactable;
+
+                tx.put(ROOT, "foo", "bar")?;
+                Ok(())
+            })
+            .unwrap();
+            am.get_heads()
+        })
+        .await
+        .unwrap();
+
+    assert!(!heads.is_empty());
+    samod.stop().await;
+}
+
+#[tokio::test]
 async fn basic_sync() {
     init_logging();
 
