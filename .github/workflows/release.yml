@@ -1,0 +1,50 @@
+name: Release
+
+# Lockstep releases (Scheme A — shared version): both crates carry the same
+# version and are released together by a single tag.
+#
+#   git tag v0.13.0 && git push origin v0.13.0
+#
+# cargo publish --workspace publishes both crates in dependency order
+# (samod-core before samod) in a single coordinated invocation.
+#
+# Authentication uses crates.io Trusted Publishing (GitHub OIDC) — no API token
+# secret is stored. Each crate must have this repo + workflow registered as a
+# Trusted Publisher on crates.io (Settings -> Trusted Publishing).
+on:
+  push:
+    tags:
+      - "v*"
+
+concurrency:
+  group: crates-io-release
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    # Gates publishing behind the `crates-io` environment's protection rules
+    # (required reviewers), so each release waits for a manual approval click.
+    environment: crates-io
+    permissions:
+      contents: read
+      id-token: write # required to mint the OIDC token for Trusted Publishing
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        run: rustup update stable && rustup default stable
+
+      - name: Authenticate to crates.io
+        uses: rust-lang/crates-io-auth-action@v1
+        id: auth
+
+      - name: Publish crates
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+        # Publishes all publishable workspace members in dependency order.
+        # samod-test-harness is skipped via `publish = false` in its manifest.
+        run: cargo publish --workspace

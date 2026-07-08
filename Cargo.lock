@@ -1518,7 +1518,7 @@ dependencies = [
 
 [[package]]
 name = "samod-core"
-version = "0.12.0"
+version = "0.12.1"
 dependencies = [
  "automerge",
  "base64 0.21.7",

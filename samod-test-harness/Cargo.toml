@@ -2,6 +2,7 @@
 name = "samod-test-harness"
 version = "0.1.0"
 edition = "2024"
+publish = false
 
 [dependencies]
 automerge = { workspace = true }
@@ -11,5 +12,3 @@ tracing = "0.1.41"
 url = "2.5"
 
 [lib]
-
-pulish = false
