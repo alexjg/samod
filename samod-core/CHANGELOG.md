@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.12.2 - 2026-07-08
+
+Released to stay in lockstep with the `samod` crate; no library changes.
+
 ## 0.12.0 - 2026-06-05
 
 ### Breaking changes
