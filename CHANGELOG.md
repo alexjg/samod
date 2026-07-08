@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+* Added `DocHandle::with_document_async` which does two things:
+  a) Does not block the current task waiting to acquire the underlying document
+    mutex
+  b) In threadpool mode runs the closure on the threadpool so that slow
+     automerge operations don't block the calling task
+
 ## 0.12.1 - 2026-06-22
 
 ### Changed

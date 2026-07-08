@@ -15,7 +15,7 @@ use crate::{
 pub(crate) enum DocRunner {
     /// Run the actors on a threadpool
     #[cfg(feature = "threadpool")]
-    Threadpool(rayon::ThreadPool),
+    Threadpool(Arc<rayon::ThreadPool>),
     /// Run the actors on an async task which is listening on the other end of `tx_spawn`
     Async {
         /// Channel to send newly spawned actors to the async runner
