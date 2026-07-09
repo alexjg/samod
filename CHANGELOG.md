@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+* `FileSystemStorage` no longer panics if the filesystem is not shaped the way
+  it expects.
+
 ## 0.12.2 - 2026-07-08
 
 ### Added
