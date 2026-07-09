@@ -59,8 +59,7 @@ pub mod tokio {
                 if !meta.is_file() {
                     return None;
                 }
-                let result = tokio::fs::read(path).await.unwrap();
-                Some(result)
+                tokio::fs::read(path).await.ok()
             }
         }
 
@@ -81,8 +80,15 @@ pub mod tokio {
                 // Now walk the directory, recursively
                 let mut to_visit = vec![(path, prefix)];
                 while let Some((next_path, key_prefix)) = to_visit.pop() {
-                    let mut entries = tokio::fs::read_dir(&next_path).await.unwrap();
-                    while let Some(entry) = entries.next_entry().await.unwrap() {
+                    let Ok(mut entries) = tokio::fs::read_dir(&next_path).await else {
+                        continue;
+                    };
+                    loop {
+                        let entry = match entries.next_entry().await {
+                            Ok(Some(entry)) => entry,
+                            Ok(None) => break,
+                            Err(_) => break,
+                        };
                         let Some(filename) = entry.file_name().to_str().map(|s| s.to_string())
                         else {
                             continue; // Skip entries with non-UTF8 names
@@ -96,8 +102,10 @@ pub mod tokio {
                         };
                         if entry_meta.is_dir() {
                             to_visit.push((entry_path, next_key_prefix));
-                        } else if entry_path.is_file() {
-                            let data = tokio::fs::read(&entry_path).await.unwrap();
+                        } else if entry_meta.is_file() {
+                            let Ok(data) = tokio::fs::read(&entry_path).await else {
+                                continue;
+                            };
                             result.insert(next_key_prefix, data);
                         }
                     }
@@ -113,16 +121,18 @@ pub mod tokio {
         ) -> impl Future<Output = ()> + Send {
             let path = self.key_to_path(&key);
             async move {
-                let parent = path.parent().unwrap();
-                tokio::fs::create_dir_all(parent).await.unwrap();
-                tokio::fs::write(path, data).await.unwrap();
+                if let Some(parent) = path.parent()
+                    && tokio::fs::create_dir_all(parent).await.is_err() {
+                        return;
+                    }
+                let _ = tokio::fs::write(path, data).await;
             }
         }
 
         fn delete(&self, key: samod_core::StorageKey) -> impl Future<Output = ()> + Send {
             let path = self.key_to_path(&key);
             async move {
-                tokio::fs::remove_file(path).await.unwrap();
+                let _ = tokio::fs::remove_file(path).await;
             }
         }
     }
