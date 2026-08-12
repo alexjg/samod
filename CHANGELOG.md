@@ -1,6 +1,10 @@
 # Changelog
 
-## Unreleased
+## 0.13.0 - 2026-08-12
+
+### Fixed
+
+* FileSystemStorage now limits the number of file descriptors it opens to 500
 
 ### Breaking Changes
 
