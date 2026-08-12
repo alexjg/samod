@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Breaking Changes
+
+- Updated to `automerge@0.11.0`.
+
 ## 0.12.2 - 2026-07-08
 
 Released to stay in lockstep with the `samod` crate; no library changes.
