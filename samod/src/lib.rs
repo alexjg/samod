@@ -80,7 +80,7 @@
 //!
 //! - A **dialer** actively connects to a remote endpoint and automatically
 //!   reconnects with exponential backoff. Create one with [`Repo::dial()`],
-//!   which takes a [`BackoffConfig`] and an `Arc<dyn Dialer>`
+//!   which takes a [`BackoffConfig`] and an `Arc` containing a [`Dialer`].
 //! - `Repo::find` will wait for any dialers which are in the process of
 //!   connection to either establish a connection, or start retrying,
 //!   before marking a document as unavailable. This means that as long
@@ -330,7 +330,7 @@ pub use conn_finished_reason::ConnFinishedReason;
 pub use connection::Connection;
 pub use dialer_handle::{DialerEvent, DialerFailed, DialerHandle};
 mod dialer;
-pub use dialer::Dialer;
+pub use dialer::{DialError, Dialer};
 mod doc_actor_inner;
 mod doc_handle;
 mod doc_runner;
@@ -714,11 +714,11 @@ impl Repo {
     /// # Returns
     ///
     /// A [`DialerHandle`] for observing and controlling the dialer.
-    pub fn dial(
+    pub fn dial<D: Dialer + ?Sized>(
         &self,
         backoff: BackoffConfig,
-        dialer: Arc<dyn Dialer>,
-    ) -> Result<DialerHandle, Stopped> {
+        dialer: Arc<D>,
+    ) -> Result<DialerHandle<D::Error>, Stopped> {
         let mut inner = self.inner.lock().unwrap();
 
         let url = dialer.url();
@@ -736,12 +736,13 @@ impl Repo {
             Err(_) => return Err(Stopped),
         };
 
-        // Register the dialer so the IO loop can use it for (re)connections
-        inner.dialers.lock().unwrap().insert(dialer_id, dialer);
-
-        // Create and register the dialer handle
         let handle = DialerHandle::new(dialer_id, self.clone());
-        inner.dialer_handles.insert(dialer_id, handle.clone());
+        let erased_dialer = io_loop::erase_dialer(dialer, handle.clone());
+        inner
+            .dialers
+            .lock()
+            .unwrap()
+            .insert(dialer_id, erased_dialer);
 
         Ok(handle)
     }
@@ -792,9 +793,6 @@ impl Repo {
 
         // Remove the dialer
         inner.dialers.lock().unwrap().remove(&dialer_id);
-
-        // Remove handle
-        inner.dialer_handles.remove(&dialer_id);
 
         let event = HubEvent::remove_dialer(dialer_id);
         inner.handle_event(event);
@@ -890,7 +888,6 @@ struct Inner {
     stop_waiters: Vec<oneshot::Sender<()>>,
     rng: rand::rngs::StdRng,
     dialers: Arc<Mutex<HashMap<DialerId, io_loop::DynDialer>>>,
-    dialer_handles: HashMap<DialerId, DialerHandle>,
     acceptor_handles: HashMap<ListenerId, AcceptorHandle>,
     observer: Option<Arc<dyn observer::RepoObserver>>,
     search_state_streams: HashMap<DocumentId, Vec<mpsc::UnboundedSender<SearchState>>>,
@@ -900,6 +897,10 @@ impl Inner {
     /// Find a listener for the given URL.
     fn find_listener_for_url(&self, url: &url::Url) -> Option<ListenerId> {
         self.hub.find_listener_for_url(url)
+    }
+
+    fn dialer(&self, dialer_id: DialerId) -> Option<io_loop::DynDialer> {
+        self.dialers.lock().unwrap().get(&dialer_id).cloned()
     }
 
     /// Dispatch a task to a document actor.
@@ -1034,8 +1035,8 @@ impl Inner {
                         // Route to DialerHandle or AcceptorHandle based on owner
                         match owner {
                             ConnectionOwner::Dialer(dialer_id) => {
-                                if let Some(dh) = self.dialer_handles.get(&dialer_id) {
-                                    dh.notify_connected(samod_peer_info, connection_id);
+                                if let Some(dialer) = self.dialer(dialer_id) {
+                                    dialer.notify_connected(samod_peer_info, connection_id);
                                 }
                             }
                             ConnectionOwner::Listener(listener_id) => {
@@ -1068,8 +1069,8 @@ impl Inner {
                     // Notify dialer/acceptor handle of disconnection
                     match owner {
                         ConnectionOwner::Dialer(dialer_id) => {
-                            if let Some(dh) = self.dialer_handles.get(&dialer_id) {
-                                dh.notify_disconnected(error.clone());
+                            if let Some(dialer) = self.dialer(dialer_id) {
+                                dialer.notify_disconnected(error.clone());
                             }
                         }
                         ConnectionOwner::Listener(listener_id) => {
@@ -1109,13 +1110,13 @@ impl Inner {
             );
 
             // Notify dialer handle of reconnection attempt (if attempt > 0)
-            if let Some(dh) = self.dialer_handles.get(&request.dialer_id) {
+            if let Some(dialer) = self.dialer(request.dialer_id) {
                 // We check if this is a retry by looking at the hub's dialer state.
                 // The first dial request (attempt 0) is the initial dial, not a reconnection.
                 if let Some(attempt) = self.hub.dialer_attempt(request.dialer_id)
                     && attempt > 0
                 {
-                    dh.notify_reconnecting(attempt);
+                    dialer.notify_reconnecting(attempt);
                 }
             }
 
@@ -1162,8 +1163,8 @@ impl Inner {
                         %url,
                         "dialer exhausted retry budget"
                     );
-                    if let Some(dh) = self.dialer_handles.get(dialer_id) {
-                        dh.notify_max_retries_reached();
+                    if let Some(dialer) = self.dialer(*dialer_id) {
+                        dialer.notify_max_retries_reached();
                     }
                 }
             }
@@ -1381,7 +1382,6 @@ impl TaskSetup {
             stop_waiters: Vec::new(),
             rng: rand::rngs::StdRng::from_os_rng(),
             dialers: dialers.clone(),
-            dialer_handles: HashMap::new(),
             acceptor_handles: HashMap::new(),
             observer: observer.clone(),
             search_state_streams: HashMap::new(),

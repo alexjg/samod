@@ -61,8 +61,8 @@ struct StorageTaskComplete {
     actor_id: DocumentActorId,
 }
 
-/// Type alias for a shared, type-erased dialer.
-pub(crate) type DynDialer = Arc<dyn crate::Dialer>;
+mod dialer;
+pub(crate) use dialer::{DynDialer, ErasedDialError, erase as erase_dialer};
 
 #[tracing::instrument(skip(inner, storage, announce_policy, rx, dialers, observer))]
 pub(crate) async fn io_loop<S: LocalStorage, A: LocalAnnouncePolicy>(
@@ -125,6 +125,7 @@ pub(crate) async fn io_loop<S: LocalStorage, A: LocalAnnouncePolicy>(
                             let event = HubEvent::dial_failed(
                                 dialer_id,
                                 "no dialer registered".to_string(),
+                                false,
                             );
                             inner.lock().unwrap().handle_event(event);
                         }
@@ -322,6 +323,7 @@ async fn establish_transport(
                         let event = HubEvent::dial_failed(
                             dialer_id,
                             "internal error creating connection".to_string(),
+                            false,
                         );
                         inner_guard.handle_event(event);
                         return;
@@ -349,14 +351,24 @@ async fn establish_transport(
             // Drive the connection directly — we're already in the IO loop
             drive_connection(inner, drive_task).await;
         }
-        Err(e) => {
+        Err(ErasedDialError::Transient(error)) => {
             tracing::warn!(
                 ?dialer_id,
                 %url,
-                error = %e,
+                error = %error,
                 "dial failed"
             );
-            let event = HubEvent::dial_failed(dialer_id, e.to_string());
+            let event = HubEvent::dial_failed(dialer_id, error.to_string(), false);
+            inner.lock().unwrap().handle_event(event);
+        }
+        Err(ErasedDialError::Permanent(error)) => {
+            tracing::warn!(
+                ?dialer_id,
+                %url,
+                %error,
+                "dialer permanently failed"
+            );
+            let event = HubEvent::dial_failed(dialer_id, error, true);
             inner.lock().unwrap().handle_event(event);
         }
     }

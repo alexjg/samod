@@ -148,10 +148,14 @@ impl HubEvent {
     /// The IO layer failed to establish a transport for a dialer.
     ///
     /// Triggers backoff and schedules a retry, or transitions to `Failed`
-    /// if max retries have been exceeded.
-    pub fn dial_failed(dialer_id: DialerId, error: String) -> HubEvent {
+    /// if the failure is permanent or max retries have been exceeded.
+    pub fn dial_failed(dialer_id: DialerId, error: String, permanent: bool) -> HubEvent {
         HubEvent {
-            payload: HubEventPayload::Input(HubInput::DialFailed { dialer_id, error }),
+            payload: HubEventPayload::Input(HubInput::DialFailed {
+                dialer_id,
+                error,
+                permanent,
+            }),
         }
     }
 

@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+### Breaking Changes
+
+* `Dialer` now has an associated `Error` type, and `Dialer::connect` returns
+  `DialError<Self::Error>` to distinguish transient and permanent failures.
+* `DialerHandle` and `DialerFailed` are now generic over the dialer's error
+  type. `DialerFailed` is now an enum distinguishing exhausted retries from a
+  user-defined permanent failure.
+* Added `DialerEvent::PermanentFailure`
+
+### Added
+
+* `Dialer::connect` can return a `DialError::PermanentFailure` to indicate
+  that samod should not retry connection. This error is returned to listeners
+  on `DialerHandle::established`
+
 ## 0.13.0 - 2026-08-12
 
 ### Fixed

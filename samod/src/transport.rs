@@ -110,6 +110,8 @@ pub mod channel {
     }
 
     impl Dialer for ChannelDialer {
+        type Error = Infallible;
+
         fn url(&self) -> url::Url {
             self.url.clone()
         }
@@ -119,10 +121,7 @@ pub mod channel {
         ) -> std::pin::Pin<
             Box<
                 dyn std::future::Future<
-                        Output = Result<
-                            Transport,
-                            Box<dyn std::error::Error + Send + Sync + 'static>,
-                        >,
+                        Output = Result<Transport, crate::DialError<Self::Error>>,
                     > + Send,
             >,
         > {
@@ -137,9 +136,7 @@ pub mod channel {
                         dialer_rx.map(Ok::<_, Infallible>),
                         acceptor_tx,
                     ))
-                    .map_err(|e| {
-                        Box::new(e) as Box<dyn std::error::Error + Send + Sync + 'static>
-                    })?;
+                    .map_err(crate::DialError::transient)?;
                 Ok(Transport {
                     stream: Box::pin(acceptor_rx.map(Ok)),
                     sink: Box::pin(dialer_tx.with(|i| futures::future::ready(Ok(i)))),

@@ -1,3 +1,5 @@
+use std::convert::Infallible;
+use std::error::Error;
 use std::sync::{Arc, Mutex};
 
 use futures::channel::oneshot;
@@ -27,20 +29,48 @@ pub enum DialerEvent {
     /// The dialer has permanently failed (max retries exceeded).
     /// No further reconnection attempts will be made.
     MaxRetriesReached,
+    /// The dialer reported a permanent failure.
+    PermanentFailure,
 }
 
 /// Error returned when a dialer permanently fails before establishing a
 /// connection.
-#[derive(Debug, Clone)]
-pub struct DialerFailed;
+#[derive(Debug)]
+pub enum DialerFailed<E = Infallible> {
+    /// The dialer's retry budget was exhausted.
+    MaxRetriesReached,
+    /// The dialer reported a permanent, user-defined error.
+    PermanentFailure(Arc<E>),
+}
 
-impl std::fmt::Display for DialerFailed {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "dialer permanently failed (max retries exceeded)")
+impl<E> Clone for DialerFailed<E> {
+    fn clone(&self) -> Self {
+        match self {
+            Self::MaxRetriesReached => Self::MaxRetriesReached,
+            Self::PermanentFailure(error) => Self::PermanentFailure(error.clone()),
+        }
     }
 }
 
-impl std::error::Error for DialerFailed {}
+impl<E: std::fmt::Display> std::fmt::Display for DialerFailed<E> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::MaxRetriesReached => {
+                write!(f, "dialer permanently failed (max retries exceeded)")
+            }
+            Self::PermanentFailure(error) => write!(f, "dialer permanently failed: {error}"),
+        }
+    }
+}
+
+impl<E: Error + 'static> Error for DialerFailed<E> {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::MaxRetriesReached => None,
+            Self::PermanentFailure(error) => Some(error.as_ref()),
+        }
+    }
+}
 
 /// Handle to a dialer with automatic reconnection.
 ///
@@ -52,33 +82,42 @@ impl std::error::Error for DialerFailed {}
 /// - Observe lifecycle events with [`DialerHandle::events()`]
 /// - Check connection status with [`DialerHandle::is_connected()`]
 /// - Shut down the dialer with [`DialerHandle::close()`]
-#[derive(Clone)]
-pub struct DialerHandle {
-    inner: Arc<Mutex<DialerHandleInner>>,
+pub struct DialerHandle<E = Infallible> {
+    inner: Arc<Mutex<DialerHandleInner<E>>>,
     dialer_id: DialerId,
     repo: Repo,
 }
 
-struct DialerHandleInner {
+impl<E> Clone for DialerHandle<E> {
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+            dialer_id: self.dialer_id,
+            repo: self.repo.clone(),
+        }
+    }
+}
+
+struct DialerHandleInner<E> {
     /// Current peer info if connected.
     peer_info: Option<PeerInfo>,
     /// Current connection ID if connected.
     connection_id: Option<ConnectionId>,
     /// Whether the dialer has permanently failed.
-    permanently_failed: bool,
+    failure: Option<DialerFailed<E>>,
     /// Senders for event subscribers.
     event_senders: Vec<unbounded::UnboundedSender<DialerEvent>>,
     /// Waiters for the `established()` future.
-    established_waiters: Vec<oneshot::Sender<Result<PeerInfo, DialerFailed>>>,
+    established_waiters: Vec<oneshot::Sender<Result<PeerInfo, DialerFailed<E>>>>,
 }
 
-impl DialerHandle {
+impl<E: Error + Send + Sync + 'static> DialerHandle<E> {
     pub(crate) fn new(dialer_id: DialerId, repo: Repo) -> Self {
         Self {
             inner: Arc::new(Mutex::new(DialerHandleInner {
                 peer_info: None,
                 connection_id: None,
-                permanently_failed: false,
+                failure: None,
                 event_senders: Vec::new(),
                 established_waiters: Vec::new(),
             })),
@@ -97,7 +136,7 @@ impl DialerHandle {
     ///
     /// Returns `Err` if the dialer permanently fails before
     /// establishing a connection (e.g. max retries exceeded).
-    pub fn established(&self) -> impl Future<Output = Result<PeerInfo, DialerFailed>> + 'static {
+    pub fn established(&self) -> impl Future<Output = Result<PeerInfo, DialerFailed<E>>> + 'static {
         let immediate_result;
         let rx;
 
@@ -107,9 +146,9 @@ impl DialerHandle {
             if let Some(ref peer_info) = inner.peer_info {
                 immediate_result = Some(Ok(peer_info.clone()));
                 rx = None;
-            } else if inner.permanently_failed {
+            } else if let Some(failure) = &inner.failure {
                 // If permanently failed, return immediately
-                immediate_result = Some(Err(DialerFailed));
+                immediate_result = Some(Err(failure.clone()));
                 rx = None;
             } else {
                 let (tx, channel_rx) = oneshot::channel();
@@ -123,7 +162,9 @@ impl DialerHandle {
             if let Some(result) = immediate_result {
                 return result;
             }
-            rx.unwrap().await.unwrap_or(Err(DialerFailed))
+            rx.unwrap()
+                .await
+                .unwrap_or(Err(DialerFailed::MaxRetriesReached))
         }
     }
 
@@ -166,6 +207,26 @@ impl DialerHandle {
     }
 
     // -- Internal methods called from Inner::handle_event --
+
+    pub(crate) fn notify_permanent_failure(&self, error: E) {
+        let mut inner = self.inner.lock().unwrap();
+        if inner.failure.is_some() {
+            return;
+        }
+
+        let error = Arc::new(error);
+        let failure = DialerFailed::PermanentFailure(error.clone());
+        inner.failure = Some(failure.clone());
+
+        for waiter in inner.established_waiters.drain(..) {
+            let _ = waiter.send(Err(failure.clone()));
+        }
+
+        let event = DialerEvent::PermanentFailure;
+        inner
+            .event_senders
+            .retain(|tx| tx.unbounded_send(event.clone()).is_ok());
+    }
 
     /// Notify the handle that a connection was established.
     pub(crate) fn notify_connected(&self, peer_info: PeerInfo, connection_id: ConnectionId) {
@@ -212,11 +273,16 @@ impl DialerHandle {
     /// Notify the handle that max retries have been reached.
     pub(crate) fn notify_max_retries_reached(&self) {
         let mut inner = self.inner.lock().unwrap();
-        inner.permanently_failed = true;
+        if inner.failure.is_some() {
+            return;
+        }
+
+        let failure = DialerFailed::MaxRetriesReached;
+        inner.failure = Some(failure.clone());
 
         // Notify established waiters of failure
         for waiter in inner.established_waiters.drain(..) {
-            let _ = waiter.send(Err(DialerFailed));
+            let _ = waiter.send(Err(failure.clone()));
         }
 
         let event = DialerEvent::MaxRetriesReached;
@@ -226,7 +292,7 @@ impl DialerHandle {
     }
 }
 
-impl std::fmt::Debug for DialerHandle {
+impl<E> std::fmt::Debug for DialerHandle<E> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DialerHandle")
             .field("dialer_id", &self.dialer_id)

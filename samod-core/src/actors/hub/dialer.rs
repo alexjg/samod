@@ -99,6 +99,14 @@ impl DialerState {
         ConnectionLostOutcome::WillRetry { retry_at }
     }
 
+    pub(crate) fn handle_permanent_dial_failure(&mut self) -> bool {
+        if !matches!(self.status, DialerStatus::TransportPending) {
+            return false;
+        }
+        self.status = DialerStatus::Failed;
+        true
+    }
+
     /// Associate a connection with this dialer (called during create_dialer_connection).
     ///
     /// Returns `true` if the association succeeded (dialer was in TransportPending state).

@@ -393,7 +393,7 @@ impl SamodWrapper {
     /// Notify the hub that a dial attempt failed for a dialer.
     pub fn dial_failed(&mut self, dialer_id: DialerId, error: String) {
         self.inbox
-            .push_back(HubEvent::dial_failed(dialer_id, error));
+            .push_back(HubEvent::dial_failed(dialer_id, error, false));
         self.handle_events();
     }
 

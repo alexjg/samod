@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+### Breaking Changes
+
+- `HubEvent::dial_failed` now takes a `permanent` boolean indicating whether
+  retrying can succeed.
+
+### Changed
+
+- Permanent dial failures transition the dialer directly to its terminal
+  `Failed` state without applying backoff or consuming the retry budget.
+
 ## 0.13.0 - 2026-08-12
 
 ### Breaking Changes

@@ -497,8 +497,14 @@ impl State {
                             self.handle_create_listener_connection(now, results, listener_id);
                         results.completed_commands.insert(command_id, result);
                     }
-                    HubInput::DialFailed { dialer_id, error } => {
-                        self.handle_dial_failed(rng, now, results, dialer_id, &error);
+                    HubInput::DialFailed {
+                        dialer_id,
+                        error,
+                        permanent,
+                    } => {
+                        self.handle_dial_failed(
+                            rng, now, results, dialer_id, &error, permanent,
+                        );
                     }
                     HubInput::RemoveDialer { dialer_id } => {
                         self.handle_remove_dialer(results, dialer_id);
@@ -1147,17 +1153,31 @@ impl State {
         results: &mut HubResults,
         dialer_id: DialerId,
         error: &str,
+        permanent: bool,
     ) {
         let Some(dialer) = self.dialers.get_mut(&dialer_id) else {
             tracing::warn!(
                 ?dialer_id,
                 %error,
+                permanent,
                 "dial_failed for unknown dialer"
             );
             return;
         };
 
         let url = dialer.url.clone();
+        if permanent {
+            if dialer.handle_permanent_dial_failure() {
+                tracing::warn!(
+                    ?dialer_id,
+                    %url,
+                    %error,
+                    "dialer permanently failed"
+                );
+            }
+            return;
+        }
+
         tracing::warn!(
             ?dialer_id,
             %url,

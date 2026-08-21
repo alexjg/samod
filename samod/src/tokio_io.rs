@@ -1,3 +1,4 @@
+use std::convert::Infallible;
 use std::sync::Arc;
 
 use futures::FutureExt;
@@ -105,6 +106,8 @@ impl TcpDialer {
 }
 
 impl Dialer for TcpDialer {
+    type Error = Infallible;
+
     fn url(&self) -> url::Url {
         Url::parse(&format!("tcp://{}:{}", self.host, self.port)).unwrap()
     }
@@ -113,12 +116,14 @@ impl Dialer for TcpDialer {
         &self,
     ) -> futures::future::BoxFuture<
         'static,
-        Result<crate::Transport, Box<dyn std::error::Error + Send + Sync + 'static>>,
+        Result<crate::Transport, crate::DialError<Self::Error>>,
     > {
         let host = self.host.clone();
         let port = self.port;
         async move {
-            let io = tokio::net::TcpStream::connect((host, port)).await?;
+            let io = tokio::net::TcpStream::connect((host, port))
+                .await
+                .map_err(crate::DialError::transient)?;
             let transport = Transport::from_tokio_io(io);
             Ok(transport)
         }
@@ -149,7 +154,7 @@ impl Repo {
         &self,
         url: Url,
         backoff: crate::BackoffConfig,
-    ) -> Result<crate::DialerHandle, TcpDialerError> {
+    ) -> Result<crate::DialerHandle<Infallible>, TcpDialerError> {
         let dialer = Arc::new(TcpDialer::new(url)?);
         self.dial(backoff, dialer)
             .map_err(|_| TcpDialerError::RepoStopped)

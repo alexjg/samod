@@ -7,6 +7,8 @@ use crate::Repo;
 use crate::connection::ConnectionHandle;
 
 #[cfg(feature = "tungstenite")]
+use std::convert::Infallible;
+#[cfg(feature = "tungstenite")]
 use std::pin::Pin;
 #[cfg(feature = "tungstenite")]
 use std::sync::Arc;
@@ -166,6 +168,8 @@ impl TungsteniteDialer {
 
 #[cfg(feature = "tungstenite")]
 impl crate::Dialer for TungsteniteDialer {
+    type Error = Infallible;
+
     fn url(&self) -> Url {
         self.url.clone()
     }
@@ -175,16 +179,15 @@ impl crate::Dialer for TungsteniteDialer {
     ) -> Pin<
         Box<
             dyn std::future::Future<
-                    Output = Result<
-                        crate::Transport,
-                        Box<dyn std::error::Error + Send + Sync + 'static>,
-                    >,
+                    Output = Result<crate::Transport, crate::DialError<Self::Error>>,
                 > + Send,
         >,
     > {
         let url = self.url.clone();
         Box::pin(async move {
-            let (ws, _response) = tokio_tungstenite::connect_async(url.as_str()).await?;
+            let (ws, _response) = tokio_tungstenite::connect_async(url.as_str())
+                .await
+                .map_err(crate::DialError::transient)?;
 
             // Wrap tungstenite errors into NetworkError
             let ws = ws
@@ -224,7 +227,7 @@ impl Repo {
         &self,
         url: Url,
         backoff: crate::BackoffConfig,
-    ) -> Result<crate::DialerHandle, crate::Stopped> {
+    ) -> Result<crate::DialerHandle<Infallible>, crate::Stopped> {
         let dialer = Arc::new(TungsteniteDialer::new(url));
         self.dial(backoff, dialer)
     }

@@ -262,13 +262,42 @@ fn dialer_dial_failed_schedules_retry() {
         &mut hub,
         &mut rng,
         now,
-        HubEvent::dial_failed(dialer_id, "connection refused".to_string()),
+        HubEvent::dial_failed(dialer_id, "connection refused".to_string(), false),
     );
 
     // Should NOT immediately emit a new dial request (waiting for backoff)
     assert!(results.dial_requests.is_empty());
     // Not failed permanently (unlimited retries)
     assert!(results.dialer_events.is_empty());
+}
+
+#[test]
+fn permanent_dial_failure_stops_without_retrying() {
+    let mut hub = make_hub("alice");
+    let mut rng = make_rng();
+    let now = UnixTimestamp::from_millis(1000);
+
+    let config = DialerConfig {
+        url: url::Url::parse("wss://sync.example.com").unwrap(),
+        backoff: BackoffConfig {
+            initial_delay: Duration::from_millis(1),
+            max_delay: Duration::from_millis(1),
+            max_retries: None,
+        },
+    };
+    let (dialer_id, _results) = add_dialer(&mut hub, &mut rng, now, config);
+
+    let results = handle_event(
+        &mut hub,
+        &mut rng,
+        now,
+        HubEvent::dial_failed(dialer_id, "unauthorized".to_string(), true),
+    );
+    assert!(results.dial_requests.is_empty());
+
+    let much_later = now + Duration::from_secs(100);
+    let results = handle_event(&mut hub, &mut rng, much_later, HubEvent::tick());
+    assert!(results.dial_requests.is_empty());
 }
 
 #[test]
@@ -293,7 +322,7 @@ fn dialer_retries_after_tick() {
         &mut hub,
         &mut rng,
         now,
-        HubEvent::dial_failed(dialer_id, "connection refused".to_string()),
+        HubEvent::dial_failed(dialer_id, "connection refused".to_string(), false),
     );
 
     // Tick too early
@@ -331,7 +360,7 @@ fn dialer_max_retries_reached() {
         &mut hub,
         &mut rng,
         now,
-        HubEvent::dial_failed(dialer_id, "fail 1".to_string()),
+        HubEvent::dial_failed(dialer_id, "fail 1".to_string(), false),
     );
 
     now += Duration::from_secs(10);
@@ -347,7 +376,7 @@ fn dialer_max_retries_reached() {
         &mut hub,
         &mut rng,
         now,
-        HubEvent::dial_failed(dialer_id, "fail 2".to_string()),
+        HubEvent::dial_failed(dialer_id, "fail 2".to_string(), false),
     );
     assert!(results.dialer_events.is_empty());
 
@@ -364,7 +393,7 @@ fn dialer_max_retries_reached() {
         &mut hub,
         &mut rng,
         now,
-        HubEvent::dial_failed(dialer_id, "fail 3".to_string()),
+        HubEvent::dial_failed(dialer_id, "fail 3".to_string(), false),
     );
 
     assert_eq!(results.dialer_events.len(), 1);
@@ -505,7 +534,7 @@ fn backoff_delay_increases_exponentially() {
             &mut hub,
             &mut rng,
             now,
-            HubEvent::dial_failed(dialer_id, format!("fail {i}")),
+            HubEvent::dial_failed(dialer_id, format!("fail {i}"), false),
         );
 
         let mut tick_time = now;
@@ -555,7 +584,7 @@ fn backoff_capped_at_max_delay() {
             &mut hub,
             &mut rng,
             now,
-            HubEvent::dial_failed(dialer_id, format!("fail {i}")),
+            HubEvent::dial_failed(dialer_id, format!("fail {i}"), false),
         );
 
         let tick_time = now + max_delay + Duration::from_millis(100);
@@ -609,7 +638,7 @@ fn dialer_attempt_tracking() {
         &mut hub,
         &mut rng,
         now,
-        HubEvent::dial_failed(dialer_id, "fail".to_string()),
+        HubEvent::dial_failed(dialer_id, "fail".to_string(), false),
     );
     assert_eq!(hub.dialer_attempt(dialer_id), Some(1));
 
@@ -620,7 +649,7 @@ fn dialer_attempt_tracking() {
         &mut hub,
         &mut rng,
         now,
-        HubEvent::dial_failed(dialer_id, "fail".to_string()),
+        HubEvent::dial_failed(dialer_id, "fail".to_string(), false),
     );
     assert_eq!(hub.dialer_attempt(dialer_id), Some(2));
 }

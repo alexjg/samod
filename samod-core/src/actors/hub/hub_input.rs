@@ -47,6 +47,8 @@ pub(crate) enum HubInput {
     DialFailed {
         dialer_id: DialerId,
         error: String,
+        /// Whether retrying can never succeed.
+        permanent: bool,
     },
     /// Remove a dialer and close its connection
     RemoveDialer {

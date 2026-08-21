@@ -13,6 +13,7 @@
 //! 2. `sink.close().await` fails → `SinkMapErr::take_f()` panics (f is None)
 
 use std::{
+    convert::Infallible,
     pin::Pin,
     sync::Arc,
     task::{Context, Poll},
@@ -104,6 +105,8 @@ struct FaultySinkDialer {
 }
 
 impl Dialer for FaultySinkDialer {
+    type Error = Infallible;
+
     fn url(&self) -> Url {
         self.url.clone()
     }
@@ -113,7 +116,7 @@ impl Dialer for FaultySinkDialer {
     ) -> Pin<
         Box<
             dyn std::future::Future<
-                    Output = Result<Transport, Box<dyn std::error::Error + Send + Sync + 'static>>,
+                    Output = Result<Transport, samod::DialError<Self::Error>>,
                 > + Send,
         >,
     > {
@@ -131,7 +134,7 @@ impl Dialer for FaultySinkDialer {
                 .sink_map_err(|e| FaultyError(format!("send error: {e:?}")));
             acceptor
                 .accept(Transport::new(acc_stream, acc_sink))
-                .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync + 'static>)?;
+                .map_err(samod::DialError::transient)?;
 
             // The dialer side gets a normal stream (so inbound messages from
             // the acceptor arrive fine) but a FAULTY sink.
