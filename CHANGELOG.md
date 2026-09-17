@@ -4,6 +4,7 @@
 
 ### Breaking Changes
 
+* Updated to `automerge@0.12.0`.
 * `Dialer` now has an associated `Error` type, and `Dialer::connect` returns
   `DialError<Self::Error>` to distinguish transient and permanent failures.
 * `DialerHandle` and `DialerFailed` are now generic over the dialer's error

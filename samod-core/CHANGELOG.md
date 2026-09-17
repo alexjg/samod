@@ -4,6 +4,7 @@
 
 ### Breaking Changes
 
+- Updated to `automerge@0.12.0`.
 - `HubEvent::dial_failed` now takes a `permanent` boolean indicating whether
   retrying can succeed.
 

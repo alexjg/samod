@@ -56,7 +56,7 @@ async fn many_docs_can_be_created_and_modified() {
             doc.with_document(|d| {
                 let value = d.get(ROOT, "index").unwrap().unwrap();
                 assert_eq!(
-                    value.0.to_i64(),
+                    value.0.as_i64(),
                     Some(i as i64),
                     "document {i} has wrong value"
                 );
