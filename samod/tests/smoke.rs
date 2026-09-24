@@ -833,3 +833,26 @@ async fn find_reports_unavailable_for_missing_doc_with_connected_peer() {
     alice.stop().await;
     bob.stop().await;
 }
+
+#[tokio::test]
+async fn accept_after_stop_returns_stopped() {
+    use samod::Transport;
+
+    init_logging();
+
+    let bob = Repo::build_tokio()
+        .with_peer_id(PeerId::from("bob"))
+        .load()
+        .await;
+    let acceptor = bob
+        .make_acceptor(url::Url::parse("ws://bob:0").unwrap())
+        .unwrap();
+
+    bob.stop().await;
+
+    let transport = Transport::new(
+        futures::stream::pending::<Result<Vec<u8>, std::convert::Infallible>>(),
+        futures::sink::drain(),
+    );
+    assert!(acceptor.accept(transport).is_err());
+}

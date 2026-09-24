@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+* `AcceptorHandle::accept` on a stopped `Repo` returns `Err(Stopped)` instead
+  of panicking
+
 ## 0.16.0 - 2026-10-23
 
 The headline change here is that `AnnouncePolicy` has been replaced with
