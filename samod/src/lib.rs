@@ -829,7 +829,8 @@ impl Repo {
 
         let connection_id = match rx_result.try_recv() {
             Ok(Some(CommandResult::CreateConnection { connection_id })) => connection_id,
-            Ok(other) => panic!(
+            Ok(None) => return Err(Stopped), // Hub is stopped, event was ignored
+            Ok(Some(other)) => panic!(
                 "unexpected command result {:?} for create_listener_connection",
                 other
             ),

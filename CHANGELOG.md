@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+* `AcceptorHandle::accept` on a stopped `Repo` now returns `Err(Stopped)`
+  instead of panicking (and poisoning the repo's internal lock)
+
 ## 0.14.0 - 2026-09-17
 
 ### Breaking Changes
