@@ -155,6 +155,7 @@ impl State {
                 format!("Listener {:?} connection removed", listener_id)
             }
         };
+        let msg = conn.closed_reason().map(str::to_owned).unwrap_or(msg);
         results.emit_disconnect_event(*connection_id, conn.owner(), msg);
         results.emit_io_action(HubIoAction::Disconnect {
             connection_id: *connection_id,
@@ -343,18 +344,11 @@ impl State {
         }
     }
 
-    pub(crate) fn pop_closed_connections(&mut self) -> Vec<ConnectionId> {
-        let closed: Vec<_> = self
-            .connections
+    fn closed_connections(&self) -> Vec<ConnectionId> {
+        self.connections
             .iter()
             .filter_map(|(id, conn)| if conn.is_closed() { Some(*id) } else { None })
-            .collect();
-
-        for id in &closed {
-            self.connections.remove(id);
-        }
-
-        closed
+            .collect()
     }
 
     pub(crate) fn pop_new_connection_info(&mut self) -> HashMap<ConnectionId, ConnectionInfo> {
@@ -485,16 +479,27 @@ impl State {
                     HubInput::CreateDialerConnection {
                         command_id,
                         dialer_id,
+                        expected_peer_id,
                     } => {
-                        let result = self.handle_create_dialer_connection(now, results, dialer_id);
+                        let result = self.handle_create_dialer_connection(
+                            now,
+                            results,
+                            dialer_id,
+                            expected_peer_id,
+                        );
                         results.completed_commands.insert(command_id, result);
                     }
                     HubInput::CreateListenerConnection {
                         command_id,
                         listener_id,
+                        expected_peer_id,
                     } => {
-                        let result =
-                            self.handle_create_listener_connection(now, results, listener_id);
+                        let result = self.handle_create_listener_connection(
+                            now,
+                            results,
+                            listener_id,
+                            expected_peer_id,
+                        );
                         results.completed_commands.insert(command_id, result);
                     }
                     HubInput::DialFailed {
@@ -502,9 +507,7 @@ impl State {
                         error,
                         permanent,
                     } => {
-                        self.handle_dial_failed(
-                            rng, now, results, dialer_id, &error, permanent,
-                        );
+                        self.handle_dial_failed(rng, now, results, dialer_id, &error, permanent);
                     }
                     HubInput::RemoveDialer { dialer_id } => {
                         self.handle_remove_dialer(results, dialer_id);
@@ -516,16 +519,10 @@ impl State {
             }
         }
 
-        // Notify document actors of any closed connections
-        for conn_id in self.pop_closed_connections() {
-            for doc in self.document_actors() {
-                results.send_to_doc_actor(
-                    doc.actor_id,
-                    HubToDocMsgPayload::ConnectionClosed {
-                        connection_id: conn_id,
-                    },
-                );
-            }
+        // Protocol rejection must tear down the transport as well as document
+        // state, and update the owning listener or dialer's retry state.
+        for conn_id in self.closed_connections() {
+            self.handle_connection_lost(rng, now, results, conn_id);
         }
 
         // Now ensure that every connection is connected to every document
@@ -635,11 +632,7 @@ impl State {
                     "failed to decode message: {}",
                     e
                 );
-                let error_msg = format!("Message decode error: {e}");
-                if let Some(conn) = self.connections.get(&connection_id) {
-                    tracing::debug!(error=?error_msg, remote_peer_id=?conn.remote_peer_id(), "failing connection");
-                    self.remove_connection(out, &connection_id);
-                }
+                conn.close(format!("Message decode error: {e}"));
 
                 return CommandResult::Receive {
                     connection_id,
@@ -732,6 +725,7 @@ impl State {
         // Validate this request is for us
         if target_id != self.peer_id {
             tracing::trace!(?connection_id, ?msg, "ignoring message for another peer");
+            return;
         }
 
         // Ensure there's a document actor for this document
@@ -1059,6 +1053,7 @@ impl State {
         now: UnixTimestamp,
         out: &mut HubResults,
         dialer_id: DialerId,
+        expected_peer_id: Option<PeerId>,
     ) -> CommandResult {
         let dialer_exists = self.dialers.contains_key(&dialer_id);
         if !dialer_exists {
@@ -1071,6 +1066,7 @@ impl State {
             out,
             ConnectionArgs {
                 direction: ConnDirection::Outgoing,
+                expected_peer_id,
                 owner,
                 local_peer_id: self.peer_id.clone(),
                 local_metadata: Some(local_metadata),
@@ -1107,6 +1103,7 @@ impl State {
         now: UnixTimestamp,
         out: &mut HubResults,
         listener_id: ListenerId,
+        expected_peer_id: Option<PeerId>,
     ) -> CommandResult {
         let listener_exists = self.listeners.contains_key(&listener_id);
         if !listener_exists {
@@ -1122,6 +1119,7 @@ impl State {
             out,
             ConnectionArgs {
                 direction: ConnDirection::Incoming,
+                expected_peer_id,
                 owner,
                 local_peer_id: self.peer_id.clone(),
                 local_metadata: Some(local_metadata),

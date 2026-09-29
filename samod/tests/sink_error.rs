@@ -115,9 +115,8 @@ impl Dialer for FaultySinkDialer {
         &self,
     ) -> Pin<
         Box<
-            dyn std::future::Future<
-                    Output = Result<Transport, samod::DialError<Self::Error>>,
-                > + Send,
+            dyn std::future::Future<Output = Result<Transport, samod::DialError<Self::Error>>>
+                + Send,
         >,
     > {
         let acceptor = self.acceptor.clone();

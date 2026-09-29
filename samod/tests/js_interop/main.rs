@@ -281,7 +281,7 @@ async fn websocket_handler(
     axum::extract::State(acceptor): axum::extract::State<AcceptorHandle>,
 ) -> axum::response::Response {
     ws.on_upgrade(|socket| async move {
-        if let Err(e) = acceptor.accept_axum(socket) {
+        if let Err(e) = acceptor.accept_axum(socket, None) {
             tracing::error!(?e, "failed to accept axum websocket");
         }
     })

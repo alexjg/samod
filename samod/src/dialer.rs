@@ -28,6 +28,10 @@ pub trait Dialer: Send + Sync + 'static {
     /// initial dial and on each reconnection attempt after backoff.
     /// Return [`DialError::TransientFailure`] to retry, or
     /// [`DialError::PermanentFailure`] to stop without retrying.
+    ///
+    /// After authenticating the remote peer, use
+    /// [`Transport::with_expected_peer_id`] on the returned transport to bind the
+    /// protocol handshake to that identity. This must be done on each reconnect.
     fn connect(&self) -> BoxFuture<'static, Result<Transport, DialError<Self::Error>>>;
 }
 

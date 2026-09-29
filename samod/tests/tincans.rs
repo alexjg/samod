@@ -106,9 +106,8 @@ impl Dialer for CancellableDialer {
         &self,
     ) -> Pin<
         Box<
-            dyn std::future::Future<
-                    Output = Result<Transport, samod::DialError<Self::Error>>,
-                > + Send,
+            dyn std::future::Future<Output = Result<Transport, samod::DialError<Self::Error>>>
+                + Send,
         >,
     > {
         let (dialer_side, acceptor_side) = mem_transport_pair_with_cancel(self.cancel.clone());

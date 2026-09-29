@@ -1,7 +1,7 @@
 use automerge::{Automerge, transaction::CommitOptions};
 
 use crate::{
-    ConnectionId, DialerId, DocumentActorId, DocumentId, ListenerId,
+    ConnectionId, DialerId, DocumentActorId, DocumentId, ListenerId, PeerId,
     actors::{
         DocToHubMsg,
         hub::{Command, CommandId},
@@ -115,7 +115,14 @@ impl HubEvent {
     /// Called by the IO layer after successfully establishing a transport.
     /// The connection is immediately associated with the dialer.
     /// The dialer transitions from `TransportPending` to `Connected`.
-    pub fn create_dialer_connection(dialer_id: DialerId) -> DispatchedCommand {
+    ///
+    /// If `expected_peer_id` is set, the handshake must claim that identity or
+    /// the connection is disconnected before any document synchronization.
+    /// The caller is responsible for authenticating the transport itself.
+    pub fn create_dialer_connection(
+        dialer_id: DialerId,
+        expected_peer_id: Option<PeerId>,
+    ) -> DispatchedCommand {
         let command_id = CommandId::new();
         DispatchedCommand {
             command_id,
@@ -123,6 +130,7 @@ impl HubEvent {
                 payload: HubEventPayload::Input(HubInput::CreateDialerConnection {
                     command_id,
                     dialer_id,
+                    expected_peer_id,
                 }),
             },
         }
@@ -132,7 +140,14 @@ impl HubEvent {
     ///
     /// Called by the IO layer after accepting an inbound transport.
     /// The connection is immediately added to the listener's active set.
-    pub fn create_listener_connection(listener_id: ListenerId) -> DispatchedCommand {
+    ///
+    /// If `expected_peer_id` is set, the handshake must claim that identity or
+    /// the connection is disconnected before any document synchronization.
+    /// The caller is responsible for authenticating the transport itself.
+    pub fn create_listener_connection(
+        listener_id: ListenerId,
+        expected_peer_id: Option<PeerId>,
+    ) -> DispatchedCommand {
         let command_id = CommandId::new();
         DispatchedCommand {
             command_id,
@@ -140,6 +155,7 @@ impl HubEvent {
                 payload: HubEventPayload::Input(HubInput::CreateListenerConnection {
                     command_id,
                     listener_id,
+                    expected_peer_id,
                 }),
             },
         }

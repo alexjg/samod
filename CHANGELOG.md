@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased
+
+### Breaking Changes
+
+* `AcceptorHandle::accept_axum` now takes an `expected_peer_id: Option<PeerId>`.
+  Pass `None` to preserve the previous behavior.
+
+### Added
+
+* `Transport::with_expected_peer_id` binds a transport to an externally
+  authenticated peer ID, rejecting mismatched handshakes before synchronization.
+* `Transport::from_axum` converts an upgraded axum WebSocket into a transport
+  that can be configured before accepting it.
+
+### Fixed
+
+* Reject messages which whose sender differs from the handshake identity
+* Protocol rejection now closes the transport and updates connection/retry state.
+* Connections closed before handshaking resolve handshake waiters, and rejected
+  inbound handshakes no longer decrement the count of healthy connections.
+
 ## 0.14.0 - 2026-09-17
 
 ### Breaking Changes

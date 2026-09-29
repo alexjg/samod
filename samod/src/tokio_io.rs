@@ -114,10 +114,8 @@ impl Dialer for TcpDialer {
 
     fn connect(
         &self,
-    ) -> futures::future::BoxFuture<
-        'static,
-        Result<crate::Transport, crate::DialError<Self::Error>>,
-    > {
+    ) -> futures::future::BoxFuture<'static, Result<crate::Transport, crate::DialError<Self::Error>>>
+    {
         let host = self.host.clone();
         let port = self.port;
         async move {
