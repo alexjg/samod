@@ -129,9 +129,10 @@ pub mod tokio {
             let path = self.key_to_path(&key);
             async move {
                 if let Some(parent) = path.parent()
-                    && tokio::fs::create_dir_all(parent).await.is_err() {
-                        return;
-                    }
+                    && tokio::fs::create_dir_all(parent).await.is_err()
+                {
+                    return;
+                }
                 let _ = tokio::fs::write(path, data).await;
             }
         }

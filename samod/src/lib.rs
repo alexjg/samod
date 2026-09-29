@@ -169,6 +169,54 @@
 //! # });
 //! ```
 //!
+//! ### Authentication
+//!
+//! `samod` operates in terms of [`PeerId`]s. A connection announces itself as
+//! being some [`PeerId`] and the [`AnnouncePolicy`] implementation operates in
+//! terms of these [`PeerId`]s. This means that if you want to restrict access
+//! to a document you need to authenticate the [`Transport`] you pass to
+//! [`AcceptorHandle::accept()`] or return from [`Dialer::connect()`] yourself.
+//! How exactly you authenticate a transport is up
+//! to you (e.g. you might check a bearer token on a websocket upgrade) but
+//! once you have authenticated the transport you must bind it to the peer ID
+//! you authenticated using [`Transport::with_expected_peer_id`] before passing
+//! the connection to the repo. This will enable the repo to check that the
+//! handshake and subsequent direct messages claim the authenticated peer ID.
+//! Ephemeral gossip can carry another peer's original sender ID; transport
+//! authentication does not authenticate that original author.
+//!
+//! #### Example
+//!
+//! After validating credentials (such as a bearer token on a WebSocket upgrade),
+//! pass the authenticated identity alongside the corresponding transport. This
+//! example uses an axum WebSocket and requires the `axum` feature:
+//!
+//! ```rust,no_run
+//! use samod::{AcceptorHandle, PeerId, Stopped, Transport};
+//! # #[cfg(feature = "axum")]
+//! # {
+//!
+//! // This ID must come from your authentication mechanism, not from the
+//! // peer's samod handshake or an unverified claim in the request.
+//! let authenticated_id: PeerId = todo!();
+//! // The socket is provided by axum's WebSocket upgrade callback.
+//! let socket: axum::extract::ws::WebSocket = todo!();
+//! let transport = Transport::from_axum(socket).with_expected_peer_id(authenticated_id);
+//!
+//! // Maybe you have an acceptor handle from Repo::make_acceptor().
+//! let acceptor: AcceptorHandle = todo!();
+//! acceptor.accept(transport)?;
+//! // A mismatched handshake will be disconnected before synchronization.
+//! # }
+//! # Ok::<(), Stopped>(())
+//! ```
+//!
+//! Alternatively, use `acceptor.accept_axum(socket, Some(authenticated_id))`
+//! to construct and bind the transport in one step.
+//!
+//! For outgoing connections, apply `with_expected_peer_id` to the transport
+//! returned by your [`Dialer::connect()`] implementation on every connection attempt.
+//!
 //! ## Runtimes
 //!
 //! [`RuntimeHandle`] is a trait which is intended to abstract over the various
@@ -298,8 +346,8 @@ use futures::{
 };
 use rand::SeedableRng;
 pub use samod_core::{
-    AutomergeUrl, BackoffConfig, ConnectionId, DialerId, DocSearch, DocumentId, ListenerId, PeerId,
-    PeerRequestState, StorageId, network::ConnDirection, BadDocumentId
+    AutomergeUrl, BackoffConfig, BadDocumentId, ConnectionId, DialerId, DocSearch, DocumentId,
+    ListenerId, PeerId, PeerRequestState, StorageId, network::ConnDirection,
 };
 use samod_core::{
     CommandId, CommandResult, DocumentActorId, LoaderState, UnixTimestamp,
@@ -822,7 +870,7 @@ impl Repo {
 
         // Create the connection atomically associated with the listener
         let DispatchedCommand { command_id, event } =
-            HubEvent::create_listener_connection(listener_id);
+            HubEvent::create_listener_connection(listener_id, transport.expected_peer_id);
         let (tx_result, mut rx_result) = oneshot::channel();
         inner.pending_commands.insert(command_id, tx_result);
         inner.handle_event(event);
@@ -989,7 +1037,9 @@ impl Inner {
                     }
                 }
                 HubIoAction::Disconnect { connection_id } => {
-                    match self.connections.remove(&connection_id) {
+                    // Retain the handle until ConnectionFailed has notified
+                    // per-connection listeners below.
+                    match self.connections.get(&connection_id) {
                         Some(conn_handle) => {
                             conn_handle.close();
                         }

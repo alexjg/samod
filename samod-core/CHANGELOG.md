@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+### Breaking Changes
+
+- `HubEvent::create_dialer_connection` and `create_listener_connection` now take
+  an `expected_peer_id: Option<PeerId>`. Pass `None` to trust the handshake's
+  claimed identity, or `Some(peer_id)` to bind an authenticated transport to it.
+
+### Fixed
+
+- Reject mismatched handshake identities, inconsistent direct-message senders,
+  and messages targeting another peer before dispatching them.
+- Protocol and decode failures emit disconnect IO and connection-failure events,
+  notify document actors, and update listener membership and dialer retry state.
+
 ## 0.14.0 - 2026-09-17
 
 ### Breaking Changes

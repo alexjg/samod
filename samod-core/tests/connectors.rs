@@ -134,7 +134,8 @@ fn create_dialer_connection(
     now: UnixTimestamp,
     dialer_id: DialerId,
 ) -> samod_core::ConnectionId {
-    let DispatchedCommand { command_id, event } = HubEvent::create_dialer_connection(dialer_id);
+    let DispatchedCommand { command_id, event } =
+        HubEvent::create_dialer_connection(dialer_id, None);
     let results = handle_event(hub, rng, now, event);
     results
         .completed_commands
@@ -160,7 +161,8 @@ fn create_listener_connection(
     now: UnixTimestamp,
     listener_id: ListenerId,
 ) -> samod_core::ConnectionId {
-    let DispatchedCommand { command_id, event } = HubEvent::create_listener_connection(listener_id);
+    let DispatchedCommand { command_id, event } =
+        HubEvent::create_listener_connection(listener_id, None);
     let results = handle_event(hub, rng, now, event);
     results
         .completed_commands

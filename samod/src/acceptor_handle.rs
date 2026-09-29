@@ -1,4 +1,7 @@
-use std::sync::{Arc, Mutex};
+use std::{
+    collections::HashSet,
+    sync::{Arc, Mutex},
+};
 
 use crate::{ConnectionId, connection::ConnectionHandle};
 use samod_core::ListenerId;
@@ -43,8 +46,8 @@ pub struct AcceptorHandle {
 }
 
 struct AcceptorHandleInner {
-    /// Number of currently active connections.
-    active_connection_count: usize,
+    /// Connections that have successfully completed their handshake.
+    active_connections: HashSet<ConnectionId>,
     /// Senders for event subscribers.
     event_senders: Vec<unbounded::UnboundedSender<AcceptorEvent>>,
 }
@@ -53,7 +56,7 @@ impl AcceptorHandle {
     pub(crate) fn new(listener_id: ListenerId, repo: Repo) -> Self {
         Self {
             inner: Arc::new(Mutex::new(AcceptorHandleInner {
-                active_connection_count: 0,
+                active_connections: HashSet::new(),
                 event_senders: Vec::new(),
             })),
             listener_id,
@@ -70,7 +73,9 @@ impl AcceptorHandle {
     ///
     /// Wires up the transport to the hub and starts driving the connection.
     /// This is typically called from a server framework's connection handler
-    /// (e.g. an axum WebSocket upgrade handler).
+    /// (e.g. an axum WebSocket upgrade handler). Use
+    /// [`Transport::with_expected_peer_id`](crate::Transport::with_expected_peer_id)
+    /// to bind the connection to an externally authenticated peer identity.
     pub fn accept(&self, transport: crate::Transport) -> Result<ConnectionHandle, Stopped> {
         self.repo.accept_on_listener(self.listener_id, transport)
     }
@@ -101,7 +106,7 @@ impl AcceptorHandle {
 
     /// Returns the number of currently active connections on this endpoint.
     pub fn connection_count(&self) -> usize {
-        self.inner.lock().unwrap().active_connection_count
+        self.inner.lock().unwrap().active_connections.len()
     }
 
     /// Shut down this acceptor. Closes all active connections and stops
@@ -115,7 +120,7 @@ impl AcceptorHandle {
     /// Notify the handle that a client connected.
     pub(crate) fn notify_client_connected(&self, peer_info: PeerInfo, connection_id: ConnectionId) {
         let mut inner = self.inner.lock().unwrap();
-        inner.active_connection_count += 1;
+        inner.active_connections.insert(connection_id);
 
         let event = AcceptorEvent::ClientConnected {
             peer_info,
@@ -133,7 +138,7 @@ impl AcceptorHandle {
         reason: ConnFinishedReason,
     ) {
         let mut inner = self.inner.lock().unwrap();
-        inner.active_connection_count = inner.active_connection_count.saturating_sub(1);
+        inner.active_connections.remove(&connection_id);
 
         let event = AcceptorEvent::ClientDisconnected {
             connection_id,

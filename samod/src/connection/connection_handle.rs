@@ -108,7 +108,7 @@ impl ConnectionHandle {
         async move {
             let rx = {
                 let mut inner = Self::write(&inner);
-                if let Some(finished_reason) = inner.finished_reason.take() {
+                if let Some(finished_reason) = inner.finished_reason.clone() {
                     return Err(finished_reason);
                 }
                 if let Some(info) = &inner.info {
@@ -168,7 +168,7 @@ impl ConnectionHandle {
             {
                 let rx = {
                     let mut inner = Self::write(&inner);
-                    if let Some(reason) = inner.finished_reason.take() {
+                    if let Some(reason) = inner.finished_reason.clone() {
                         return reason;
                     }
                     let (tx, rx) = oneshot::channel();
@@ -193,6 +193,9 @@ impl ConnectionHandle {
     pub(crate) fn notify_finished(&self, reason: ConnFinishedReason) {
         let mut inner = Self::write(&self.inner);
         inner.finished_reason = Some(reason.clone());
+        for l in inner.handshake_listeners.drain(..) {
+            let _ = l.send(Err(reason.clone()));
+        }
         for l in inner.finished_listeners.drain(..) {
             let _ = l.send(reason.clone());
         }
@@ -220,5 +223,28 @@ impl ConnectionHandle {
                 e.into_inner()
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use futures::{FutureExt, poll};
+
+    #[test]
+    fn closing_before_handshake_resolves_waiters_and_remembers_failure() {
+        futures::executor::block_on(async {
+            let handle = ConnectionHandle::new(ConnectionId::from(0));
+            let mut handshake = handle.handshake_complete().boxed();
+            assert!(poll!(&mut handshake).is_pending());
+            let reason = ConnFinishedReason::WeDisconnected;
+            handle.notify_finished(reason.clone());
+            assert_eq!(handshake.await.unwrap_err(), reason);
+            // Reading one outcome must not consume it for other callers.
+            assert_eq!(handle.handshake_complete().await.unwrap_err(), reason);
+            assert_eq!(handle.handshake_complete().await.unwrap_err(), reason);
+            assert_eq!(handle.finished().await, reason);
+            assert_eq!(handle.finished().await, reason);
+        });
     }
 }

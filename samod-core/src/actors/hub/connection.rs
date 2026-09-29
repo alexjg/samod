@@ -5,3 +5,6 @@ mod established_connection;
 pub(crate) use established_connection::EstablishedConnection;
 mod receive_event;
 pub(crate) use receive_event::ReceiveEvent;
+
+#[cfg(test)]
+mod tests;

@@ -103,9 +103,8 @@ impl Dialer for MockDialer {
         &self,
     ) -> Pin<
         Box<
-            dyn std::future::Future<
-                    Output = Result<Transport, samod::DialError<Self::Error>>,
-                > + Send,
+            dyn std::future::Future<Output = Result<Transport, samod::DialError<Self::Error>>>
+                + Send,
         >,
     > {
         self.connect_count.fetch_add(1, Ordering::SeqCst);
@@ -150,14 +149,15 @@ impl Dialer for FailingDialer {
         &self,
     ) -> Pin<
         Box<
-            dyn std::future::Future<
-                    Output = Result<Transport, samod::DialError<Self::Error>>,
-                > + Send,
+            dyn std::future::Future<Output = Result<Transport, samod::DialError<Self::Error>>>
+                + Send,
         >,
     > {
         self.fail_count.fetch_add(1, Ordering::SeqCst);
         Box::pin(async {
-            Err(samod::DialError::TransientFailure("connection refused".into()))
+            Err(samod::DialError::TransientFailure(
+                "connection refused".into(),
+            ))
         })
     }
 }
@@ -178,9 +178,8 @@ impl Dialer for AuthenticationFailingDialer {
         &self,
     ) -> Pin<
         Box<
-            dyn std::future::Future<
-                    Output = Result<Transport, samod::DialError<Self::Error>>,
-                > + Send,
+            dyn std::future::Future<Output = Result<Transport, samod::DialError<Self::Error>>>
+                + Send,
         >,
     > {
         self.attempts.fetch_add(1, Ordering::SeqCst);
@@ -222,9 +221,8 @@ impl Dialer for FailThenSucceedDialer {
         &self,
     ) -> Pin<
         Box<
-            dyn std::future::Future<
-                    Output = Result<Transport, samod::DialError<Self::Error>>,
-                > + Send,
+            dyn std::future::Future<Output = Result<Transport, samod::DialError<Self::Error>>>
+                + Send,
         >,
     > {
         let attempt = self.attempt.fetch_add(1, Ordering::SeqCst);

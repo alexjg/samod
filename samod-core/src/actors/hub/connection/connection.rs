@@ -18,6 +18,7 @@ pub struct Connection {
     /// The dialer or listener that owns this connection.
     owner: ConnectionOwner,
     local_peer_id: PeerId,
+    expected_peer_id: Option<PeerId>,
     local_metadata: Option<PeerMetadata>,
     /// Current phase of the connection
     phase: ConnectionPhase,
@@ -37,13 +38,14 @@ pub(crate) enum ConnectionPhase {
     WaitingForPeer,
     WaitingForJoin,
     Established(EstablishedConnection),
-    Closed,
+    Closed { reason: String },
 }
 
 pub(crate) struct ConnectionArgs {
     pub(crate) direction: ConnDirection,
     pub(crate) owner: ConnectionOwner,
     pub(crate) local_peer_id: PeerId,
+    pub(crate) expected_peer_id: Option<PeerId>,
     pub(crate) local_metadata: Option<PeerMetadata>,
     pub(crate) created_at: UnixTimestamp,
 }
@@ -56,6 +58,7 @@ impl Connection {
             direction,
             owner,
             local_peer_id,
+            expected_peer_id,
             local_metadata,
             created_at,
         }: ConnectionArgs,
@@ -64,6 +67,7 @@ impl Connection {
             id: ConnectionId::new(),
             owner,
             local_peer_id: local_peer_id.clone(),
+            expected_peer_id,
             local_metadata: local_metadata.clone(),
             phase: ConnectionPhase::WaitingForJoin,
             created_at,
@@ -103,6 +107,22 @@ impl Connection {
     ) -> Vec<ReceiveEvent> {
         self.dirty = true;
         self.last_received = Some(now);
+        if self.is_closed() {
+            tracing::warn!(conn_id=?self.id, "received message in closed connection phase");
+            return Vec::new();
+        }
+        if let Err(reason) = self.validate_identity(&msg) {
+            tracing::warn!(conn_id=?self.id, %reason, "rejecting message");
+            self.send(
+                out,
+                now,
+                WireMessage::Error {
+                    message: reason.clone(),
+                },
+            );
+            self.close(reason);
+            return Vec::new();
+        }
         match self.phase {
             ConnectionPhase::WaitingForJoin => match msg {
                 WireMessage::Join {
@@ -125,7 +145,7 @@ impl Connection {
                                 message: "unsupported protocol version".to_string(),
                             },
                         );
-                        self.phase = ConnectionPhase::Closed;
+                        self.close("unsupported protocol version");
                         return Vec::new();
                     }
                     tracing::trace!(conn_id=?self.id, "sending Peer message in response to Join");
@@ -163,7 +183,7 @@ impl Connection {
                             message: "expected a join message".to_string(),
                         },
                     );
-                    self.phase = ConnectionPhase::Closed;
+                    self.close("expected a join message");
                     Vec::new()
                 }
             },
@@ -190,7 +210,7 @@ impl Connection {
                                 message: "unsupported protocol version".to_string(),
                             },
                         );
-                        self.phase = ConnectionPhase::Closed;
+                        self.close("unsupported protocol version");
                         return Vec::new();
                     }
                     self.phase = ConnectionPhase::Established(EstablishedConnection {
@@ -217,7 +237,7 @@ impl Connection {
                             message: "expected a peer message".to_string(),
                         },
                     );
-                    self.phase = ConnectionPhase::Closed;
+                    self.close("expected a peer message");
                     Vec::new()
                 }
             },
@@ -235,12 +255,12 @@ impl Connection {
                             message: "unexpected join or peer message".to_string(),
                         },
                     );
-                    self.phase = ConnectionPhase::Closed;
+                    self.close("unexpected join or peer message");
                     Vec::new()
                 }
                 WireMessage::Leave { sender_id } => {
                     tracing::trace!(conn_id=?self.id, ?sender_id, "received Leave message");
-                    self.phase = ConnectionPhase::Closed;
+                    self.close("peer left");
                     Vec::new()
                 }
                 WireMessage::Request {
@@ -300,14 +320,11 @@ impl Connection {
                         "received error message in established phase: {}",
                         message
                     );
-                    self.phase = ConnectionPhase::Closed;
+                    self.close(format!("peer reported an error: {message}"));
                     Vec::new()
                 }
             },
-            ConnectionPhase::Closed => {
-                tracing::warn!(conn_id=?self.id, "received message in closed connection phase");
-                Vec::new()
-            }
+            ConnectionPhase::Closed { .. } => Vec::new(),
         }
     }
 
@@ -361,8 +378,82 @@ impl Connection {
         }
     }
 
+    /// Validate identities before producing any handshake or document events.
+    fn validate_identity(&self, msg: &WireMessage) -> Result<(), String> {
+        let (sender_id, target_id) = match msg {
+            WireMessage::Join { sender_id, .. } | WireMessage::Leave { sender_id } => {
+                (Some(sender_id), None)
+            }
+            WireMessage::Peer {
+                sender_id,
+                target_id,
+                ..
+            }
+            | WireMessage::Request {
+                sender_id,
+                target_id,
+                ..
+            }
+            | WireMessage::Sync {
+                sender_id,
+                target_id,
+                ..
+            }
+            | WireMessage::DocUnavailable {
+                sender_id,
+                target_id,
+                ..
+            }
+            | WireMessage::RemoteHeadsChanged {
+                sender_id,
+                target_id,
+                ..
+            }
+            | WireMessage::RemoteSubscriptionChange {
+                sender_id,
+                target_id,
+                ..
+            } => (Some(sender_id), Some(target_id)),
+            // Gossip preserves the original author's ID, not the immediate peer's.
+            // Transport authentication does not authenticate that author.
+            WireMessage::Ephemeral { target_id, .. } => (None, Some(target_id)),
+            WireMessage::Error { .. } => (None, None),
+        };
+        let expected = self.remote_peer_id().or(self.expected_peer_id.as_ref());
+        if let (Some(expected), Some(actual)) = (expected, sender_id)
+            && expected != actual
+        {
+            return Err(format!(
+                "peer ID mismatch: expected {expected}, received {actual}"
+            ));
+        }
+        if let Some(target) = target_id
+            && target != &self.local_peer_id
+        {
+            return Err(format!(
+                "target peer ID mismatch: expected {}, received {target}",
+                self.local_peer_id
+            ));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn close(&mut self, reason: impl Into<String>) {
+        self.dirty = true;
+        self.phase = ConnectionPhase::Closed {
+            reason: reason.into(),
+        };
+    }
+
+    pub(crate) fn closed_reason(&self) -> Option<&str> {
+        match &self.phase {
+            ConnectionPhase::Closed { reason } => Some(reason),
+            _ => None,
+        }
+    }
+
     pub(crate) fn is_closed(&self) -> bool {
-        matches!(self.phase, ConnectionPhase::Closed)
+        self.closed_reason().is_some()
     }
 
     fn send(&mut self, out: &mut HubResults, now: UnixTimestamp, msg: WireMessage) {

@@ -306,7 +306,7 @@ async fn establish_transport(
             let conn_handle = {
                 let mut inner_guard = inner.lock().unwrap();
                 let DispatchedCommand { command_id, event } =
-                    HubEvent::create_dialer_connection(dialer_id);
+                    HubEvent::create_dialer_connection(dialer_id, transport.expected_peer_id);
 
                 let (tx_result, mut rx_result) = futures::channel::oneshot::channel();
                 inner_guard.pending_commands.insert(command_id, tx_result);
