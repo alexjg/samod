@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.15.0 - 2026-09-30
 
 ### Breaking Changes
 
@@ -16,7 +16,8 @@
 
 ### Fixed
 
-* Reject messages which whose sender differs from the handshake identity
+* Reject direct messages whose sender differs from the handshake identity,
+  and messages addressed to another peer.
 * Protocol rejection now closes the transport and updates connection/retry state.
 * Connections closed before handshaking resolve handshake waiters, and rejected
   inbound handshakes no longer decrement the count of healthy connections.
