@@ -1,3 +1,5 @@
+use rand::RngExt;
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct StorageId(String);
 

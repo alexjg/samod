@@ -1,3 +1,4 @@
+use rand::RngExt;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 use uuid::Uuid;
@@ -25,14 +26,14 @@ impl DocumentId {
 
 impl std::fmt::Debug for DocumentId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let as_string = bs58::encode(&self.0).with_check().into_string();
+        let as_string = b58::encode(self.as_bytes()).to_string();
         write!(f, "{as_string}")
     }
 }
 
 impl std::fmt::Display for DocumentId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let as_string = bs58::encode(&self.0).with_check().into_string();
+        let as_string = b58::encode(self.as_bytes()).to_string();
         write!(f, "{as_string}")
     }
 }
@@ -56,7 +57,7 @@ impl FromStr for DocumentId {
     type Err = BadDocumentId;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match bs58::decode(s).with_check(None).into_vec() {
+        match b58::decode(s) {
             Ok(bytes) => Self::try_from(bytes),
             Err(_) => {
                 // attempt to parse legacy UUID format

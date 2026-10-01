@@ -57,7 +57,7 @@ impl SamodWrapper {
         let mut loader = samod_core::SamodLoader::new(peer_id);
         let now = UnixTimestamp::now();
 
-        let mut rng = rand::rngs::StdRng::from_os_rng();
+        let mut rng = rand::rngs::StdRng::from_rng(&mut rand::rng());
 
         // Execute the loading process
         let hub = loop {

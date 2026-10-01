@@ -1430,7 +1430,7 @@ impl TaskSetup {
             tx_to_core,
             waiting_for_connection: HashMap::new(),
             stop_waiters: Vec::new(),
-            rng: rand::rngs::StdRng::from_os_rng(),
+            rng: rand::rngs::StdRng::from_rng(&mut rand::rng()),
             dialers: dialers.clone(),
             acceptor_handles: HashMap::new(),
             observer: observer.clone(),
@@ -1557,7 +1557,7 @@ where
 }
 
 async fn load_hub<S: LocalStorage>(storage: S, mut loading: samod_core::SamodLoader) -> Box<Hub> {
-    let mut rng = rand::rngs::StdRng::from_os_rng();
+    let mut rng = rand::rngs::StdRng::from_rng(&mut rand::rng());
     let mut running_tasks = FuturesUnordered::new();
     loop {
         match loading.step(&mut rng, UnixTimestamp::now()) {

@@ -1,3 +1,4 @@
+use rand::RngExt;
 use url::Url;
 
 use crate::{ConnectionId, DialerId, UnixTimestamp, network::BackoffConfig};

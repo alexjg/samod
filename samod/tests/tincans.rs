@@ -2,7 +2,7 @@
 use std::{convert::Infallible, pin::Pin, sync::Arc};
 
 use futures::{FutureExt, Sink, SinkExt, Stream, StreamExt, select};
-use rand::Rng;
+use rand::RngExt;
 use samod::{
     AcceptorEvent, AcceptorHandle, BackoffConfig, ConnectionId, Dialer, DialerHandle, PeerInfo,
     Repo, Transport,
