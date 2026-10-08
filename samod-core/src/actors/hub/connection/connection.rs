@@ -365,6 +365,12 @@ impl Connection {
             .insert(document_id.clone(), PeerDocState::empty());
     }
 
+    pub(crate) fn remove_document(&mut self, document_id: &DocumentId) {
+        if let ConnectionPhase::Established(established) = &mut self.phase {
+            established.document_subscriptions.remove(document_id);
+        }
+    }
+
     pub(crate) fn update_peer_state(&mut self, document_id: &DocumentId, state: PeerDocState) {
         let ConnectionPhase::Established(established) = &mut self.phase else {
             tracing::warn!("attmpeted to update document for non-established connection");

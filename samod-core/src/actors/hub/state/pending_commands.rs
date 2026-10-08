@@ -7,6 +7,7 @@ use crate::{
 
 pub(super) struct PendingCommands {
     pending_create_commands: HashMap<DocumentActorId, Vec<CommandId>>,
+    pending_unload_commands: HashMap<DocumentActorId, Vec<CommandId>>,
     completed_commands: Vec<(CommandId, CommandResult)>,
 }
 
@@ -14,6 +15,7 @@ impl PendingCommands {
     pub(super) fn new() -> Self {
         Self {
             pending_create_commands: HashMap::new(),
+            pending_unload_commands: HashMap::new(),
             completed_commands: Vec::new(),
         }
     }
@@ -43,6 +45,26 @@ impl PendingCommands {
                         document_id: document_id.clone(),
                     },
                 ));
+            }
+        }
+    }
+
+    pub(super) fn add_pending_unload_command(
+        &mut self,
+        actor_id: DocumentActorId,
+        command_id: CommandId,
+    ) {
+        self.pending_unload_commands
+            .entry(actor_id)
+            .or_default()
+            .push(command_id);
+    }
+
+    pub(super) fn resolve_pending_unload(&mut self, actor_id: DocumentActorId) {
+        if let Some(command_ids) = self.pending_unload_commands.remove(&actor_id) {
+            for command_id in command_ids {
+                self.completed_commands
+                    .push((command_id, CommandResult::UnloadDocument));
             }
         }
     }

@@ -66,6 +66,38 @@ async fn with_document_async_smoke() {
 }
 
 #[tokio::test]
+async fn unload_forgets_document_and_find_reloads_it() {
+    init_logging();
+    let samod = Repo::build_tokio().load().await;
+
+    let doc = samod.create(Automerge::new()).await.unwrap();
+    doc.with_document(|am| {
+        use automerge::{AutomergeError, ROOT};
+
+        am.transact::<_, _, AutomergeError>(|tx| {
+            use automerge::transaction::Transactable;
+
+            tx.put(ROOT, "foo", "bar")?;
+            Ok(())
+        })
+        .unwrap();
+    });
+    let doc_id = doc.document_id().clone();
+
+    samod.unload(doc_id.clone()).await.unwrap();
+
+    samod.unload(doc_id.clone()).await.unwrap();
+
+    let reloaded = samod.find(doc_id).await.unwrap().unwrap();
+    let value = reloaded.with_document(|am| {
+        use automerge::{ROOT, ReadDoc};
+        am.get(ROOT, "foo").unwrap().map(|(v, _)| v.to_string())
+    });
+    assert_eq!(value.as_deref(), Some("\"bar\""));
+    samod.stop().await;
+}
+
+#[tokio::test]
 async fn basic_sync() {
     init_logging();
 

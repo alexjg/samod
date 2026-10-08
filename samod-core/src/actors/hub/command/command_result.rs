@@ -29,6 +29,7 @@ pub enum CommandResult {
         actor_id: DocumentActorId,
         search_state: DocSearch,
     },
+    UnloadDocument,
     /// Result of AddDialer command.
     AddDialer {
         dialer_id: DialerId,

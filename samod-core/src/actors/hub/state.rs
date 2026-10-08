@@ -484,7 +484,7 @@ impl State {
                         }
                         DocToHubMsgPayload::Terminated => {
                             tracing::debug!(?actor_id, "document actor terminated");
-                            self.actors.remove(&actor_id);
+                            self.remove_document_actor(actor_id);
                         }
                     },
                     HubInput::ConnectionLost { connection_id } => {
@@ -624,6 +624,9 @@ impl State {
             }
             Command::SearchForDoc { document_id } => {
                 self.handle_search_for_doc(out, command_id, document_id)
+            }
+            Command::UnloadDocument { document_id } => {
+                self.handle_unload_document(out, command_id, document_id)
             }
         }
     }
@@ -785,6 +788,40 @@ impl State {
         // Queue command for completion when actor reports ready
         self.pending_commands
             .add_pending_create_command(actor_id, command_id);
+    }
+
+    #[tracing::instrument(skip(self, out), fields(document_id = %document_id))]
+    fn handle_unload_document(
+        &mut self,
+        out: &mut HubResults,
+        command_id: CommandId,
+        document_id: DocumentId,
+    ) -> Option<CommandResult> {
+        let Some(actor_id) = self
+            .find_actor_for_document(&document_id)
+            .map(|info| info.actor_id)
+        else {
+            tracing::debug!("unload of a document which is not loaded");
+            return Some(CommandResult::UnloadDocument);
+        };
+        out.send_to_doc_actor(actor_id, HubToDocMsgPayload::Terminate);
+        self.pending_commands
+            .add_pending_unload_command(actor_id, command_id);
+        None
+    }
+
+    fn remove_document_actor(&mut self, actor_id: DocumentActorId) {
+        let Some(info) = self.actors.remove(&actor_id) else {
+            return;
+        };
+        if self.document_to_actor.get(&info.document_id) == Some(&actor_id) {
+            self.document_to_actor.remove(&info.document_id);
+        }
+        for connection in self.connections.values_mut() {
+            connection.remove_document(&info.document_id);
+        }
+        self.searches.phases.remove(&actor_id);
+        self.pending_commands.resolve_pending_unload(actor_id);
     }
 
     #[tracing::instrument(skip(self, out), fields(document_id = %document_id))]

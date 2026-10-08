@@ -30,6 +30,8 @@ pub(crate) enum Command {
 
     /// Search for a document, receiving continuous state updates.
     SearchForDoc { document_id: DocumentId },
+
+    UnloadDocument { document_id: DocumentId },
 }
 
 impl std::fmt::Debug for Command {
@@ -50,6 +52,10 @@ impl std::fmt::Debug for Command {
                 .finish(),
             Command::SearchForDoc { document_id } => f
                 .debug_struct("SearchForDoc")
+                .field("document_id", document_id)
+                .finish(),
+            Command::UnloadDocument { document_id } => f
+                .debug_struct("UnloadDocument")
                 .field("document_id", document_id)
                 .finish(),
         }
