@@ -28,6 +28,12 @@ pub(crate) enum DocToHubMsgPayload {
         msg: Broadcast,
     },
 
+    /// Close a connection which exceeded document-level resource limits.
+    Disconnect {
+        connection_id: ConnectionId,
+        reason: String,
+    },
+
     Terminated,
 }
 

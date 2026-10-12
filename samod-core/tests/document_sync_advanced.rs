@@ -353,7 +353,7 @@ fn request_document_before_connection() {
 }
 
 #[test]
-fn peer_with_announce_policy_set_to_true_should_announce_to_peers() {
+fn share_policy_with_announce_enabled_announces_to_peers() {
     init_logging();
 
     let mut network = Network::new();
@@ -388,15 +388,15 @@ fn peer_with_announce_policy_set_to_true_should_announce_to_peers() {
 }
 
 #[test]
-fn peer_with_announce_policy_set_to_false_does_not_announce() {
+fn share_policy_with_announce_disabled_does_not_announce() {
     init_logging();
 
     let mut network = Network::new();
 
     let alice = network.create_samod("Alice");
-    network
-        .samod(&alice)
-        .set_announce_policy(Box::new(|_doc_id, _peer_id| false));
+    network.samod(&alice).set_share_policy(Box::new(|_, _| {
+        samod_core::ShareConfig::read_write().with_announce(false)
+    }));
     let bob = network.create_samod("Bob");
 
     network.connect(alice, bob);
@@ -426,19 +426,19 @@ fn peer_with_announce_policy_set_to_false_does_not_announce() {
 }
 
 #[test]
-fn peer_with_announce_policy_set_to_false_does_not_request() {
+fn share_policy_with_announce_disabled_does_not_request() {
     init_logging();
 
     let mut network = Network::new();
 
     let alice = network.create_samod("Alice");
-    network
-        .samod(&alice)
-        .set_announce_policy(Box::new(|_doc_id, _peer_id| false));
+    network.samod(&alice).set_share_policy(Box::new(|_, _| {
+        samod_core::ShareConfig::read_write().with_announce(false)
+    }));
     let bob = network.create_samod("Bob");
-    network
-        .samod(&bob)
-        .set_announce_policy(Box::new(|_, _| false));
+    network.samod(&bob).set_share_policy(Box::new(|_, _| {
+        samod_core::ShareConfig::read_write().with_announce(false)
+    }));
 
     network.connect(alice, bob);
     network.run_until_quiescent();
@@ -570,19 +570,23 @@ fn three_chained_sync_servers() {
     // announces to alice, and charlie only announces to bob. This simulates a
     // chain of federating sync servers
     let alice = network.create_samod("Alice");
-    network
-        .samod(&alice)
-        .set_announce_policy(Box::new(|_, _| false));
+    network.samod(&alice).set_share_policy(Box::new(|_, _| {
+        samod_core::ShareConfig::read_write().with_announce(false)
+    }));
     let alice_peer_id = network.samod(&alice).peer_id();
     let bob = network.create_samod("Bob");
     network
         .samod(&bob)
-        .set_announce_policy(Box::new(move |_, peer_id| peer_id == alice_peer_id));
+        .set_share_policy(Box::new(move |_, peer_id| {
+            samod_core::ShareConfig::read_write().with_announce(peer_id == alice_peer_id)
+        }));
     let bob_peer_id = network.samod(&bob).peer_id();
     let charlie = network.create_samod("Charlie");
     network
         .samod(&charlie)
-        .set_announce_policy(Box::new(move |_, peer_id| peer_id == bob_peer_id));
+        .set_share_policy(Box::new(move |_, peer_id| {
+            samod_core::ShareConfig::read_write().with_announce(peer_id == bob_peer_id)
+        }));
 
     // Connect them in a chain: Alice <-> Bob <-> Charlie
     network.connect(alice, bob);
@@ -668,9 +672,9 @@ fn dont_announce_policy_retains_documents_synced_by_clients() {
     let mut network = Network::new();
 
     let server = network.create_samod("Server");
-    network
-        .samod(&server)
-        .set_announce_policy(Box::new(|_, _| false));
+    network.samod(&server).set_share_policy(Box::new(|_, _| {
+        samod_core::ShareConfig::read_write().with_announce(false)
+    }));
 
     let client = network.create_samod("Client");
 
@@ -713,9 +717,9 @@ fn find_doesnt_bounce_through_unavailable_when_receiving_doc() {
     let mut network = Network::new();
 
     let server = network.create_samod("Server");
-    network
-        .samod(&server)
-        .set_announce_policy(Box::new(|_, _| false));
+    network.samod(&server).set_share_policy(Box::new(|_, _| {
+        samod_core::ShareConfig::read_write().with_announce(false)
+    }));
 
     let client = network.create_samod("Client");
 
@@ -758,9 +762,9 @@ fn search_status_from_requesting_to_ready() {
 
     // Create three peers: Alice, Bob, and Charlie
     let alice = network.create_samod("Alice");
-    network
-        .samod(&alice)
-        .set_announce_policy(Box::new(|_, _| false));
+    network.samod(&alice).set_share_policy(Box::new(|_, _| {
+        samod_core::ShareConfig::read_write().with_announce(false)
+    }));
     let bob = network.create_samod("Bob");
     let charlie = network.create_samod("Charlie");
 

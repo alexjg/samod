@@ -1,8 +1,11 @@
-use std::sync::{Arc, Mutex};
+use std::{
+    collections::HashSet,
+    sync::{Arc, Mutex},
+};
 
 use futures::{
     FutureExt, SinkExt, StreamExt,
-    stream::{BoxStream, FuturesUnordered},
+    stream::{BoxStream, FuturesUnordered, SelectAll},
 };
 use samod_core::{
     DialerId, DocumentActorId, DocumentId, PeerId,
@@ -17,9 +20,9 @@ use url::Url;
 use crate::{
     ConnFinishedReason, Inner,
     actor_task::ActorTask,
-    announce_policy::LocalAnnouncePolicy,
     connection::ConnectionHandle,
     observer::{self, RepoObserver},
+    share_policy::LocalSharePolicy,
     storage::LocalStorage,
     transport::BoxSink,
     unbounded::UnboundedReceiver,
@@ -37,6 +40,15 @@ pub(crate) enum IoLoopTask {
         dialer_id: DialerId,
         url: Url,
     },
+    /// The complete current set of peers connected to a document, not a delta.
+    /// Used to clean up peer-scoped resources, currently share-policy subscriptions,
+    /// when the last connection to a peer disappears. An empty set releases all
+    /// such resources for the document. This does not itself request a policy check.
+    DocumentPeersChanged {
+        actor_id: DocumentActorId,
+        peers: HashSet<PeerId>,
+    },
+    StopSharePolicies,
     /// Periodic tick to drive time-based connector logic (retry backoff).
     Tick,
 }
@@ -62,14 +74,15 @@ struct StorageTaskComplete {
 }
 
 mod dialer;
+mod share_policy;
 pub(crate) use dialer::{DynDialer, ErasedDialError, erase as erase_dialer};
 
-#[tracing::instrument(skip(inner, storage, announce_policy, rx, dialers, observer))]
-pub(crate) async fn io_loop<S: LocalStorage, A: LocalAnnouncePolicy>(
+#[tracing::instrument(skip(inner, storage, share_policy, rx, dialers, observer))]
+pub(crate) async fn io_loop<S: LocalStorage, A: LocalSharePolicy>(
     local_peer_id: PeerId,
     inner: Arc<Mutex<Inner>>,
     storage: S,
-    announce_policy: A,
+    share_policy: A,
     rx: UnboundedReceiver<IoLoopTask>,
     dialers: Arc<Mutex<std::collections::HashMap<DialerId, DynDialer>>>,
     observer: Option<Arc<dyn RepoObserver>>,
@@ -77,6 +90,8 @@ pub(crate) async fn io_loop<S: LocalStorage, A: LocalAnnouncePolicy>(
     let mut running_storage_tasks = FuturesUnordered::new();
     let mut running_connections = FuturesUnordered::new();
     let mut running_transport_establishments = FuturesUnordered::new();
+    let mut policies = share_policy::Policies::default();
+    let mut running_share_policies = SelectAll::new();
 
     loop {
         futures::select! {
@@ -88,19 +103,46 @@ pub(crate) async fn io_loop<S: LocalStorage, A: LocalAnnouncePolicy>(
                 tracing::trace!("received task");
                 match next_task {
                     IoLoopTask::Storage { doc_id, task, actor_id } => {
-                        running_storage_tasks.push({
-                            let storage = storage.clone();
-                            let announce_policy = announce_policy.clone();
-                            let observer = observer.clone();
-                            async move {
-                                let result = dispatch_document_task(storage.clone(), announce_policy.clone(), doc_id.clone(), task, observer.as_deref()).await;
-                                StorageTaskComplete {
-                                    result,
-                                    actor_id,
+                        match task.action {
+                            DocumentIoTask::Storage(action) => {
+                                let task = IoTask { task_id: task.task_id, action };
+                                running_storage_tasks.push({
+                                    let storage = storage.clone();
+                                    let observer = observer.clone();
+                                    async move {
+                                        let result = dispatch_document_storage_task(storage, doc_id, task, observer.as_deref()).await;
+                                        StorageTaskComplete { result, actor_id }
+                                    }
+                                });
+                            }
+                            DocumentIoTask::CheckSharePolicy { peer_id } => {
+                                if inner.lock().unwrap().stopping {
+                                    continue;
+                                }
+                                match policies.check(
+                                    &share_policy, actor_id, doc_id, peer_id, task.task_id,
+                                ) {
+                                    share_policy::Check::Answer(answer) => {
+                                        let inner = inner.lock().unwrap();
+                                        if !inner.stopping {
+                                            inner.dispatch_task(actor_id, answer);
+                                        }
+                                    }
+                                    share_policy::Check::Pending => {}
+                                    share_policy::Check::Subscribe(events) => {
+                                        running_share_policies.push(Box::pin(events));
+                                    }
                                 }
                             }
-                        });
+                        }
                     },
+                    IoLoopTask::DocumentPeersChanged { actor_id, peers } => {
+                        policies.set_peers(actor_id, peers);
+                    }
+                    IoLoopTask::StopSharePolicies => {
+                        policies.clear();
+                        running_share_policies.clear();
+                    }
                     IoLoopTask::DriveConnection(task) => {
                         running_connections.push(drive_connection(inner.clone(), task));
                     }
@@ -140,6 +182,15 @@ pub(crate) async fn io_loop<S: LocalStorage, A: LocalAnnouncePolicy>(
                 let inner = inner.lock().unwrap();
                 inner.dispatch_task(actor_id, ActorTask::IoComplete(result));
             },
+            event = running_share_policies.select_next_some() => {
+                let inner = inner.lock().unwrap();
+                if !inner.stopping {
+                    let actor_id = event.actor_id;
+                    for task in policies.handle_event(event) {
+                        inner.dispatch_task(actor_id, task);
+                    }
+                }
+            },
             _ = running_connections.select_next_some() => {
 
             },
@@ -149,47 +200,39 @@ pub(crate) async fn io_loop<S: LocalStorage, A: LocalAnnouncePolicy>(
         }
     }
 
+    // Policy streams may be infinite; never drain them during shutdown.
+    drop(running_share_policies);
+    drop(policies);
     while let Some(StorageTaskComplete { result, actor_id }) = running_storage_tasks.next().await {
         let inner = inner.lock().unwrap();
         inner.dispatch_task(actor_id, ActorTask::IoComplete(result));
     }
 }
 
-async fn dispatch_document_task<S: LocalStorage, A: LocalAnnouncePolicy>(
+async fn dispatch_document_storage_task<S: LocalStorage>(
     storage: S,
-    announce: A,
     document_id: DocumentId,
-    task: IoTask<DocumentIoTask>,
+    task: IoTask<StorageTask>,
     obs: Option<&dyn RepoObserver>,
 ) -> IoResult<DocumentIoResult> {
-    match task.action {
-        DocumentIoTask::Storage(storage_task) => {
-            let operation = match &storage_task {
-                StorageTask::Load { .. } => observer::StorageOperation::Load,
-                StorageTask::LoadRange { .. } => observer::StorageOperation::LoadRange,
-                StorageTask::Put { .. } => observer::StorageOperation::Put,
-                StorageTask::Delete { .. } => observer::StorageOperation::Delete,
-            };
-            let start = std::time::Instant::now();
-            let result = dispatch_storage_task(storage_task, storage).await;
-            if let Some(obs) = obs {
-                obs.observe(&observer::RepoEvent::StorageOperationCompleted {
-                    document_id: document_id.clone(),
-                    operation,
-                    duration: start.elapsed(),
-                });
-            }
-            IoResult {
-                task_id: task.task_id,
-                payload: DocumentIoResult::Storage(result),
-            }
-        }
-        DocumentIoTask::CheckAnnouncePolicy { peer_id } => IoResult {
-            task_id: task.task_id,
-            payload: DocumentIoResult::CheckAnnouncePolicy(
-                announce.should_announce(document_id, peer_id).await,
-            ),
-        },
+    let operation = match &task.action {
+        StorageTask::Load { .. } => observer::StorageOperation::Load,
+        StorageTask::LoadRange { .. } => observer::StorageOperation::LoadRange,
+        StorageTask::Put { .. } => observer::StorageOperation::Put,
+        StorageTask::Delete { .. } => observer::StorageOperation::Delete,
+    };
+    let start = std::time::Instant::now();
+    let result = dispatch_storage_task(task.action, storage).await;
+    if let Some(obs) = obs {
+        obs.observe(&observer::RepoEvent::StorageOperationCompleted {
+            document_id,
+            operation,
+            duration: start.elapsed(),
+        });
+    }
+    IoResult {
+        task_id: task.task_id,
+        payload: DocumentIoResult::Storage(result),
     }
 }
 

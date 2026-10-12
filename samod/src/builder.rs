@@ -1,12 +1,12 @@
 use std::sync::Arc;
 
-use samod_core::PeerId;
+use samod_core::{PeerId, ShareConfig};
 
 use crate::{
     Repo,
-    announce_policy::{AlwaysAnnounce, AnnouncePolicy, LocalAnnouncePolicy},
     observer::RepoObserver,
     runtime::{LocalRuntimeHandle, RuntimeHandle},
+    share_policy::{LocalSharePolicy, SharePolicy},
     storage::{InMemoryStorage, LocalStorage, Storage},
 };
 
@@ -33,13 +33,13 @@ pub enum ConcurrencyConfig {
 /// hand works with runtimes that implement [`LocalRuntimeHandle`] and thus does
 /// not require [`Send`] futures. If you want to use
 /// [`load_local`](Self::load_local) you need to configure the storage and
-/// announce policy implementations to be implementations of [`LocalStorage`]
-/// and [`LocalAnnouncePolicy`] respectively. See the [module level
+/// share policy implementations to be implementations of [`LocalStorage`]
+/// and [`LocalSharePolicy`] respectively. See the [module level
 /// documentation on runtimes](./index.html#runtimes) for more details.
 pub struct RepoBuilder<S, R, A> {
     pub(crate) storage: S,
     pub(crate) runtime: R,
-    pub(crate) announce_policy: A,
+    pub(crate) share_policy: A,
     pub(crate) peer_id: Option<PeerId>,
     pub(crate) concurrency: ConcurrencyConfig,
     pub(crate) observer: Option<Arc<dyn RepoObserver>>,
@@ -51,7 +51,7 @@ impl<S, R, A> RepoBuilder<S, R, A> {
             storage,
             peer_id: self.peer_id,
             runtime: self.runtime,
-            announce_policy: self.announce_policy,
+            share_policy: self.share_policy,
             concurrency: self.concurrency,
             observer: self.observer,
         }
@@ -62,7 +62,7 @@ impl<S, R, A> RepoBuilder<S, R, A> {
             runtime,
             peer_id: self.peer_id,
             storage: self.storage,
-            announce_policy: self.announce_policy,
+            share_policy: self.share_policy,
             concurrency: self.concurrency,
             observer: self.observer,
         }
@@ -73,12 +73,14 @@ impl<S, R, A> RepoBuilder<S, R, A> {
         self
     }
 
-    pub fn with_announce_policy<A2>(self, announce_policy: A2) -> RepoBuilder<S, R, A2> {
+    /// Configure document access and announcements for each remote peer.
+    /// Defaults to read-write access with announcements enabled.
+    pub fn with_share_policy<A2>(self, share_policy: A2) -> RepoBuilder<S, R, A2> {
         RepoBuilder {
             runtime: self.runtime,
             peer_id: self.peer_id,
             storage: self.storage,
-            announce_policy,
+            share_policy,
             concurrency: self.concurrency,
             observer: self.observer,
         }
@@ -100,27 +102,27 @@ impl<S, R, A> RepoBuilder<S, R, A> {
     }
 }
 
-impl<R> RepoBuilder<InMemoryStorage, R, AlwaysAnnounce> {
-    pub fn new(runtime: R) -> RepoBuilder<InMemoryStorage, R, AlwaysAnnounce> {
+impl<R> RepoBuilder<InMemoryStorage, R, ShareConfig> {
+    pub fn new(runtime: R) -> RepoBuilder<InMemoryStorage, R, ShareConfig> {
         RepoBuilder {
             storage: InMemoryStorage::new(),
             runtime,
             peer_id: None,
-            announce_policy: AlwaysAnnounce,
+            share_policy: ShareConfig::default(),
             concurrency: ConcurrencyConfig::AsyncRuntime,
             observer: None,
         }
     }
 }
 
-impl<S: Storage, R: RuntimeHandle + Clone + Send, A: AnnouncePolicy> RepoBuilder<S, R, A> {
+impl<S: Storage, R: RuntimeHandle + Clone + Send, A: SharePolicy> RepoBuilder<S, R, A> {
     /// Create the repository
     pub async fn load(self) -> Repo {
         Repo::load(self).await
     }
 }
 
-impl<S: LocalStorage, R: LocalRuntimeHandle + Clone + 'static, A: LocalAnnouncePolicy>
+impl<S: LocalStorage, R: LocalRuntimeHandle + Clone + 'static, A: LocalSharePolicy>
     RepoBuilder<S, R, A>
 {
     /// Create the repository

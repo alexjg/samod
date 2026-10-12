@@ -1,11 +1,11 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use automerge::{Automerge, ReadDoc};
 use futures::{Stream, channel::mpsc};
 use samod_core::{
-    ConnectionId, DocumentActorId, DocumentChanged, DocumentId, SyncDirection, SyncMessageStat,
-    UnixTimestamp,
+    ConnectionId, DocumentActorId, DocumentChanged, DocumentId, PeerId, SyncDirection,
+    SyncMessageStat, UnixTimestamp,
     actors::{
         DocToHubMsg,
         document::{DocActorResult, DocumentActor, WithDocResult},
@@ -29,6 +29,8 @@ pub(crate) struct DocActorInner {
     change_listeners: Vec<mpsc::UnboundedSender<DocumentChanged>>,
     peer_state_change_listeners: Vec<mpsc::UnboundedSender<HashMap<ConnectionId, PeerDocState>>>,
     actor: DocumentActor,
+    /// The set of peers who are connected to this document as of the last [`DocAtorResult`]
+    last_observed_peers: HashSet<PeerId>,
     observer: Option<Arc<dyn RepoObserver>>,
 }
 
@@ -50,6 +52,7 @@ impl DocActorInner {
             change_listeners: Vec::new(),
             peer_state_change_listeners: Vec::new(),
             actor,
+            last_observed_peers: HashSet::new(),
             observer,
         }
     }
@@ -101,6 +104,14 @@ impl DocActorInner {
             pending_sync_messages,
         } = results;
 
+        if let Some(new_peers) = self.connected_peers_changed(stopped) {
+            // Send lifecycle changes before the checks below, including removal
+            // of the last connection to a peer even when no check is generated.
+            let _ = self.tx_io.unbounded_send(IoLoopTask::DocumentPeersChanged {
+                actor_id: self.actor_id,
+                peers: new_peers,
+            });
+        }
         let peer_count = self.actor.peers().len();
         let stats = self.actor.document().stats();
         log_sync_message_stats(
@@ -228,6 +239,25 @@ impl DocActorInner {
         self.peer_state_change_listeners.push(tx);
         let peers = peers.into_iter().map(|(k, v)| (k, v.into())).collect();
         (peers, rx)
+    }
+
+    /// Returns the set of peers for this document if it is different to self.last_observed_peers
+    pub(crate) fn connected_peers_changed(&mut self, stopped: bool) -> Option<HashSet<PeerId>> {
+        let peers = self.actor.peers();
+        let peers = if stopped {
+            HashSet::new()
+        } else {
+            peers
+                .keys()
+                .filter_map(|id| self.actor.conn_peer_id(*id))
+                .collect()
+        };
+        if peers != self.last_observed_peers {
+            self.last_observed_peers = peers.clone();
+            Some(peers)
+        } else {
+            None
+        }
     }
 }
 

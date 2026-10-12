@@ -424,6 +424,20 @@ impl State {
                             results.completed_commands.insert(command_id, result);
                         }
                     }
+                    HubInput::UpdateSharePolicy {
+                        document_id,
+                        peer_id,
+                        config,
+                    } => {
+                        if self.run_state == RunState::Running
+                            && let Some(actor) = self.find_actor_for_document(&document_id)
+                        {
+                            results.send_to_doc_actor(
+                                actor.actor_id,
+                                HubToDocMsgPayload::UpdateSharePolicy { peer_id, config },
+                            );
+                        }
+                    }
                     HubInput::Tick => {
                         self.handle_tick(rng, now, results);
                     }
@@ -459,6 +473,14 @@ impl State {
                         }
                         DocToHubMsgPayload::Broadcast { connections, msg } => {
                             self.broadcast(results, actor_id, connections, msg);
+                        }
+                        DocToHubMsgPayload::Disconnect {
+                            connection_id,
+                            reason,
+                        } => {
+                            if let Some(conn) = self.connections.get_mut(&connection_id) {
+                                conn.close(reason);
+                            }
                         }
                         DocToHubMsgPayload::Terminated => {
                             tracing::debug!(?actor_id, "document actor terminated");

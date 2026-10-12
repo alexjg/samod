@@ -31,7 +31,7 @@ pub struct DocActorResult {
     pub peer_state_changes: HashMap<ConnectionId, PeerDocState>,
     /// Sync message statistics for observability
     pub sync_message_stats: Vec<SyncMessageStat>,
-    /// Number of pending sync messages queued during Loading phase
+    /// Number of sync messages waiting for storage loading or a sharing decision
     pub pending_sync_messages: usize,
 }
 
@@ -116,8 +116,8 @@ impl DocActorResult {
         self.enqueue_task(DocumentIoTask::Storage(StorageTask::Delete { key }))
     }
 
-    pub(crate) fn check_announce_policy(&mut self, peer_id: PeerId) -> IoTaskId {
-        self.enqueue_task(DocumentIoTask::CheckAnnouncePolicy { peer_id })
+    pub(crate) fn check_share_policy(&mut self, peer_id: PeerId) -> IoTaskId {
+        self.enqueue_task(DocumentIoTask::CheckSharePolicy { peer_id })
     }
 
     fn enqueue_task(&mut self, task: DocumentIoTask) -> IoTaskId {

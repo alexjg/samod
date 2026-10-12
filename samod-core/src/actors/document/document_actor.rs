@@ -1,4 +1,7 @@
-use std::collections::HashMap;
+#[cfg(test)]
+mod tests;
+
+use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 use automerge::{Automerge, ChangeHash};
@@ -8,7 +11,7 @@ use super::SpawnArgs;
 use super::io::{DocumentIoResult, DocumentIoTask};
 use crate::actors::document::load::{Load, LoadComplete};
 use crate::actors::document::on_disk_state::OnDiskState;
-use crate::actors::document::peer_doc_connection::{AnnouncePolicy, PeerDocConnection};
+use crate::actors::document::peer_doc_connection::{PeerDocConnection, SharePolicyState};
 use crate::actors::document::phase::loading::Loading;
 use crate::actors::document::phase::ready::Ready;
 use crate::actors::document::phase::request::{Request, RequestOutcome};
@@ -19,8 +22,8 @@ use crate::doc_search::DocSearchPhase;
 use crate::io::{IoResult, IoTaskId};
 use crate::network::PeerDocState;
 use crate::{
-    ConnectionId, DocumentActorId, DocumentChanged, DocumentId, PeerId, StorageKey, SyncDirection,
-    SyncMessageStat, UnixTimestamp,
+    ConnectionId, DocumentActorId, DocumentChanged, DocumentId, PeerId, ShareConfig, StorageKey,
+    SyncDirection, SyncMessageStat, UnixTimestamp,
 };
 
 use super::errors::DocumentError;
@@ -287,7 +290,11 @@ impl DocumentActor {
 
     pub fn broadcast(&mut self, _now: UnixTimestamp, msg: Vec<u8>) -> DocActorResult {
         let mut result = DocActorResult::new();
-        let broadcast_targets = self.peer_connections.keys().copied().collect();
+        let broadcast_targets = self
+            .peer_connections
+            .iter()
+            .filter_map(|(id, conn)| conn.can_send().then_some(*id))
+            .collect();
         result
             .outgoing_messages
             .push(DocToHubMsg(DocToHubMsgPayload::Broadcast {
@@ -305,6 +312,19 @@ impl DocumentActor {
     #[tracing::instrument(skip(self, input, out), fields(local_peer_id=%self.local_peer_id))]
     fn handle_input(&mut self, now: UnixTimestamp, input: ActorInput, out: &mut DocActorResult) {
         match input {
+            ActorInput::UpdateSharePolicy { peer_id, config } => {
+                let connections: HashSet<_> = self
+                    .peer_connections
+                    .iter()
+                    .filter_map(|(id, conn)| (conn.peer_id == peer_id).then_some(*id))
+                    .collect();
+                // A delayed initial check must not overwrite a pushed update.
+                self.check_policy_tasks
+                    .retain(|_, conn| !connections.contains(conn));
+                for conn in connections {
+                    self.apply_share_policy(now, out, conn, config);
+                }
+            }
             ActorInput::Terminate => {
                 if self.run_state == RunState::Running {
                     self.run_state = RunState::Stopping;
@@ -317,13 +337,22 @@ impl DocumentActor {
             } => {
                 match message {
                     DocMessage::Ephemeral(msg) => {
+                        // Ephemera are best-effort: drop them while policy is
+                        // pending or denied. Read-only peers may send presence.
+                        if !self
+                            .peer_connections
+                            .get(&connection_id)
+                            .is_some_and(|conn| conn.can_read())
+                        {
+                            return;
+                        }
                         out.emit_ephemeral_message(msg.data.clone());
                         // Forward the message to all other connections
                         let targets = self
                             .peer_connections
                             .iter()
                             .filter_map(|(c, conn)| {
-                                if conn.peer_id != msg.sender_id {
+                                if conn.peer_id != msg.sender_id && conn.can_send() {
                                     Some(*c)
                                 } else {
                                     None
@@ -359,27 +388,13 @@ impl DocumentActor {
                             panic!("unexpected storage result");
                         }
                     }
-                    DocumentIoResult::CheckAnnouncePolicy(should_announce) => {
+                    DocumentIoResult::CheckSharePolicy(config) => {
                         let Some(conn_id) = self.check_policy_tasks.remove(&io_result.task_id)
                         else {
-                            panic!("unexpected announce policy completion");
+                            // A pushed update or closed connection superseded this lookup.
+                            return;
                         };
-                        let policy = if should_announce {
-                            AnnouncePolicy::Announce
-                        } else {
-                            AnnouncePolicy::DontAnnounce
-                        };
-                        if let Some(peer_conn) = self.peer_connections.get_mut(&conn_id) {
-                            peer_conn.set_announce_policy(policy);
-                            if let Phase::Requesting(request) = &mut self.phase {
-                                request.announce_policy_changed(conn_id, policy);
-                            };
-                        } else {
-                            tracing::warn!(
-                                ?conn_id,
-                                "announce policy check for unknown connection ID",
-                            );
-                        }
+                        self.apply_share_policy(now, out, conn_id, config);
                     }
                 }
                 if let Some(LoadComplete {
@@ -414,7 +429,7 @@ impl DocumentActor {
         {
             self.phase = Phase::Ready(Ready::new());
         }
-        self.enqueue_announce_policy_checks(out);
+        self.enqueue_share_policy_checks(out);
         self.generate_sync_messages(now, out);
         self.on_disk_state
             .save_new_changes(out, &self.document_id, &self.doc);
@@ -451,18 +466,33 @@ impl DocumentActor {
             .map(|pc| pc.peer_id.clone())
     }
 
-    fn enqueue_announce_policy_checks(&mut self, out: &mut DocActorResult) {
+    fn apply_share_policy(
+        &mut self,
+        now: UnixTimestamp,
+        out: &mut DocActorResult,
+        conn_id: ConnectionId,
+        config: ShareConfig,
+    ) {
+        let Some(peer_conn) = self.peer_connections.get_mut(&conn_id) else {
+            return;
+        };
+        let previous = peer_conn.set_share_config(config);
+        let pending = std::mem::take(&mut peer_conn.pending_sync_messages);
+        if let Phase::Requesting(request) = &mut self.phase {
+            request.share_policy_changed(conn_id, previous, config);
+        }
+        for (msg, received_at) in pending {
+            self.handle_sync_message(now, out, conn_id, msg, received_at);
+        }
+    }
+
+    fn enqueue_share_policy_checks(&mut self, out: &mut DocActorResult) {
         for peer_conn in self.peer_connections.values_mut() {
-            if peer_conn.announce_policy() == AnnouncePolicy::Unknown {
-                tracing::trace!(
-                    peer_id=?peer_conn.peer_id,
-                    conn_id=?peer_conn.connection_id,
-                    "checking announce policy"
-                );
-                let task_id = out.check_announce_policy(peer_conn.peer_id.clone());
+            if peer_conn.share_policy == SharePolicyState::Unknown {
+                let task_id = out.check_share_policy(peer_conn.peer_id.clone());
                 self.check_policy_tasks
                     .insert(task_id, peer_conn.connection_id);
-                peer_conn.set_announce_policy(AnnouncePolicy::Loading);
+                peer_conn.share_policy = SharePolicyState::Loading;
             }
         }
     }
@@ -481,11 +511,31 @@ impl DocumentActor {
         };
         tracing::debug!(?connection_id, peer_id=?peer_conn.peer_id, ?msg, "received msg");
 
-        if let SyncMessage::Request { .. } = msg {
-            // Mark the connection as having requested so we know to send them
-            // sync messages in the future, even if we haven't received a sync
-            // message from them yet
+        if matches!(msg, SyncMessage::Request { .. } | SyncMessage::Sync { .. }) {
             peer_conn.mark_requested();
+        }
+        let Some(config) = peer_conn.share_config() else {
+            if !peer_conn.buffer_sync_message(msg, received_at) {
+                self.remove_connection(connection_id);
+                out.outgoing_messages
+                    .push(DocToHubMsg(DocToHubMsgPayload::Disconnect {
+                        connection_id,
+                        reason: "too many sync messages waiting for share policy".into(),
+                    }));
+            }
+            return;
+        };
+        if !config.can_read() {
+            // Do not reveal whether the document exists, and let requestors
+            // finish their search rather than waiting indefinitely.
+            if !matches!(msg, SyncMessage::DocUnavailable) {
+                out.send_sync_message(
+                    connection_id,
+                    self.document_id.clone(),
+                    SyncMessage::DocUnavailable,
+                );
+            }
+            return;
         }
 
         let bytes = match &msg {
@@ -570,17 +620,23 @@ impl DocumentActor {
     }
 
     pub fn generate_sync_messages(&mut self, now: UnixTimestamp, out: &mut DocActorResult) {
+        out.pending_sync_messages = self
+            .peer_connections
+            .values()
+            .map(|conn| conn.pending_sync_messages.len())
+            .sum();
+        if let Phase::Loading(loading) = &self.phase {
+            out.pending_sync_messages += loading.pending_msg_count();
+            return;
+        }
         for (conn_id, peer_conn) in &mut self.peer_connections {
             let generated = match &mut self.phase {
-                Phase::Ready(ready) => ready.generate_sync_message(now, &mut self.doc, peer_conn),
-                Phase::Requesting(request) => request.generate_message(now, &self.doc, peer_conn),
-                Phase::Loading(loading) => {
-                    out.pending_sync_messages = loading.pending_msg_count();
-                    continue;
-                }
+                Phase::Ready(ready) => ready.generate_sync_messages(now, &mut self.doc, peer_conn),
+                Phase::Requesting(request) => request.generate_messages(now, &self.doc, peer_conn),
+                Phase::Loading(_) => unreachable!(),
             };
 
-            if let Some((msg, duration)) = generated {
+            for (msg, duration) in generated {
                 let bytes = match &msg {
                     SyncMessage::Request { data } | SyncMessage::Sync { data } => data.len(),
                     SyncMessage::DocUnavailable => 0,
@@ -641,6 +697,7 @@ impl DocumentActor {
 
     fn remove_connection(&mut self, conn_id: ConnectionId) {
         self.peer_connections.remove(&conn_id);
+        self.check_policy_tasks.retain(|_, id| *id != conn_id);
         if let Phase::Requesting(request) = &mut self.phase {
             request.remove_connection(conn_id);
         }

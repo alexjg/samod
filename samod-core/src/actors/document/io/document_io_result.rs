@@ -1,7 +1,7 @@
-use crate::io::StorageResult;
+use crate::{ShareConfig, io::StorageResult};
 
 #[derive(Debug, Clone)]
 pub enum DocumentIoResult {
     Storage(StorageResult),
-    CheckAnnouncePolicy(bool),
+    CheckSharePolicy(ShareConfig),
 }

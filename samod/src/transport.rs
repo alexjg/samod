@@ -59,7 +59,7 @@ impl Transport {
     ///
     /// The samod network protocol begins with a handshake where each peer
     /// introduces the peer ID it will use to identify itself going forward.
-    /// This peer ID is what is used in the [`AnnouncePolicy`] to decide
+    /// This peer ID is what is used in the [`SharePolicy`](crate::SharePolicy) to decide
     /// whether a given peer should have access to a document.
     ///
     /// By default samod will accept whatever peer ID the other ID claims to

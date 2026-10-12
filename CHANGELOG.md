@@ -1,5 +1,32 @@
 # Changelog
 
+## Unreleased
+
+The headline change here is that `AnnouncePolicy` has been replaced with
+`SharePolicy`, which allows you to configure read/write behvaior for peers, not
+just announcement. I.e. you can now deny access to a peer entirely, or allow
+them read only access.
+
+### Breaking Changes
+
+  `RepoBuilder::with_announce_policy` with `SharePolicy` / `LocalSharePolicy`
+  and `RepoBuilder::with_share_policy`. Policies return a stream of `ShareConfig`
+  decisions with `ShareAccess::{None, ReadOnly, ReadWrite}` and an `announce` flag.
+* Replace `AlwaysAnnounce` with `ShareConfig::read_write()`, and `NeverAnnounce`
+  with `ShareConfig::read_write().with_announce(false)`. Existing boolean policy
+  closures can return
+  `futures::stream::iter([ShareConfig::read_write().with_announce(old_decision)])`.
+* `PeerDocState` now includes `share_config` and `peer_read_only` fields, and
+  `PeerRequestState` has a `BlockedByPolicy` variant.
+
+### Added
+
+* Read-only sharing. The `SharePolicy` can return `ShareAccess::ReadOnly` and
+  `samod` will ignore any writes from the peer in question.
+* Dynamic share policies. The `SharePolicy` returns a `Stream` of `ShareConfig`
+  items to allow peers to update the share policy for a given (document, peer)
+  pair dynamically.
+
 ## 0.15.0 - 2026-09-30
 
 ### Breaking Changes

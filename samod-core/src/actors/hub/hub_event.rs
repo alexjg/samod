@@ -1,7 +1,7 @@
 use automerge::{Automerge, transaction::CommitOptions};
 
 use crate::{
-    ConnectionId, DialerId, DocumentActorId, DocumentId, ListenerId, PeerId,
+    ConnectionId, DialerId, DocumentActorId, DocumentId, ListenerId, PeerId, ShareConfig,
     actors::{
         DocToHubMsg,
         hub::{Command, CommandId},
@@ -73,6 +73,24 @@ impl HubEvent {
     /// Creates a command to search for an existing document.
     pub fn search_for_doc(document_id: DocumentId) -> DispatchedCommand {
         Self::dispatch_command(Command::SearchForDoc { document_id })
+    }
+
+    /// Install a sharing decision for every live connection to this peer on an
+    /// active document. This is fire-and-forget and does not trigger policy checks.
+    /// Pending initial checks are superseded; inactive documents are not loaded.
+    /// Future connections still require an initial `CheckSharePolicy` decision.
+    pub fn update_share_policy(
+        document_id: DocumentId,
+        peer_id: PeerId,
+        config: ShareConfig,
+    ) -> Self {
+        HubEvent {
+            payload: HubEventPayload::Input(HubInput::UpdateSharePolicy {
+                document_id,
+                peer_id,
+                config,
+            }),
+        }
     }
 
     /// Creates an event indicating that a network connection has been lost externally.
@@ -224,6 +242,7 @@ impl HubEvent {
                     Command::CreateDocument { .. } => "create_document",
                     Command::SearchForDoc { .. } => "search_for_doc",
                 },
+                HubInput::UpdateSharePolicy { .. } => "update_share_policy",
                 HubInput::Tick => "tick",
                 HubInput::ActorMessage { .. } => "actor_message",
                 HubInput::ConnectionLost { .. } => "connection_lost",

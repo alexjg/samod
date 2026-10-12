@@ -1,5 +1,5 @@
 use crate::{
-    ConnectionId, DialerId, DocumentActorId, ListenerId, PeerId,
+    ConnectionId, DialerId, DocumentActorId, DocumentId, ListenerId, PeerId,
     actors::{
         hub::{Command, CommandId},
         messages::DocToHubMsgPayload,
@@ -12,6 +12,11 @@ pub(crate) enum HubInput {
     Command {
         command_id: CommandId,
         command: Box<Command>,
+    },
+    UpdateSharePolicy {
+        document_id: DocumentId,
+        peer_id: PeerId,
+        config: crate::ShareConfig,
     },
     Tick,
     /// Message received from a document actor

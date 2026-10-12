@@ -207,12 +207,26 @@ impl SamodRef<'_> {
             .expect("Samod not found")
     }
 
-    pub fn set_announce_policy(&mut self, policy: Box<dyn Fn(DocumentId, PeerId) -> bool>) {
+    pub fn set_share_policy(
+        &mut self,
+        policy: Box<dyn Fn(DocumentId, PeerId) -> samod_core::ShareConfig>,
+    ) {
         self.network
             .samods
             .get_mut(self.samod_id)
             .unwrap()
-            .set_announce_policy(policy);
+            .set_share_policy(policy);
+    }
+
+    pub fn update_share_policy(
+        &mut self,
+        document_id: DocumentId,
+        peer_id: PeerId,
+        config: samod_core::ShareConfig,
+    ) {
+        self.wrapper()
+            .update_share_policy(document_id, peer_id, config);
+        self.network.run_until_quiescent();
     }
 
     pub fn pop_doc_changed(&mut self, actor_id: DocumentActorId) -> Vec<DocumentChanged> {
