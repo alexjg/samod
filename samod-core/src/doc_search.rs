@@ -32,15 +32,20 @@ impl DocSearch {
         if !self.pending_connections.is_empty() {
             return false;
         }
-        peers
-            .values()
-            .all(|p| matches!(p, PeerRequestState::Unavailable))
+        peers.values().all(|p| {
+            matches!(
+                p,
+                PeerRequestState::Unavailable | PeerRequestState::BlockedByPolicy
+            )
+        })
     }
 }
 
 /// State of searching with a specific peer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PeerRequestState {
+    /// Our sharing policy does not allow requesting the document from this peer.
+    BlockedByPolicy,
     /// We've asked this peer and are waiting for a response.
     Requested,
     /// This peer doesn't have the document.

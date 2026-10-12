@@ -1,5 +1,34 @@
 # Changelog
 
+## Unreleased
+
+### Breaking Changes
+
+- Replaced `DocumentIoTask::CheckAnnouncePolicy` and
+  `DocumentIoResult::CheckAnnouncePolicy(bool)` with `CheckSharePolicy` tasks and
+  `DocumentIoResult::CheckSharePolicy(ShareConfig)`.
+- Added `ShareConfig` and `ShareAccess` to control read/write access and
+  announcements together. `PeerDocState` includes `share_config` and
+  `peer_read_only`; `PeerRequestState` includes `BlockedByPolicy`.
+
+### Added
+
+- Enforce read-only sync with Automerge's read-only sync state. Denied peers
+  receive document-unavailable responses without disclosing document existence.
+- Apply sharing permissions to ephemeral delivery and gossip. Read-only peers
+  retain ephemeral access; denied peers do not.
+- Exclude policy-blocked sources from document lookup and preserve read-only
+  access when resetting sync state.
+- `HubEvent::update_share_policy(document_id, peer_id, config)` installs sharing
+  decisions on active document/peer connections without issuing new policy checks.
+  Pending initial checks are superseded so late results cannot undo an update.
+
+### Fixed
+
+- Avoid sync stalls after access changes when reset support is unknown or absent,
+  including when a modern peer's first reply was rejected during denial. Keep
+  the Automerge workaround local to sync message generation.
+
 ## 0.15.0 - 2026-09-30
 
 ### Breaking Changes

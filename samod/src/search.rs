@@ -53,7 +53,7 @@ impl SearchState {
 ///
 /// When a document is in a "requesting" state the Repo will automatically send
 /// a request for the document to any peer who is allowed by the
-/// [`AnnouncePolicy`]. If a peer responds with the document the repo will wait
+/// [`SharePolicy`](crate::SharePolicy). If a peer responds with the document the repo will wait
 /// until we have synced up to the initial heads the peer in question responded
 /// with before transitioning to a [`DocSearchPhase::Ready`] state.
 ///
@@ -94,13 +94,15 @@ impl Request {
     }
 
     /// A convenience method that returns `true` if all peers have said they
-    /// don't have the document and there are no pending dialers
+    /// don't have the document (or are excluded by policy), and there are no pending dialers
     pub fn is_currently_unavailable(&self) -> bool {
         self.pending_dialers.is_empty()
-            && self
-                .peers
-                .values()
-                .all(|state| matches!(state, PeerRequestState::Unavailable))
+            && self.peers.values().all(|state| {
+                matches!(
+                    state,
+                    PeerRequestState::Unavailable | PeerRequestState::BlockedByPolicy
+                )
+            })
     }
 
     /// The peers we are currently requesting the document from

@@ -68,7 +68,7 @@
 //! In this case you'll need an implementation of [`Storage`] to pass to
 //! [`RepoBuilder::with_storage`]
 //!
-//! It is possible to use [`Storage`] and [`AnnouncePolicy`] implementations which
+//! It is possible to use [`Storage`] and [`SharePolicy`] implementations which
 //! do not produce `Send` futures. In this case you will also need a runtime which
 //! can spawn non-`Send` futures. See the [runtimes](#runtimes) section for more
 //! details.
@@ -133,8 +133,8 @@
 //!
 //! * Any changes made to the document using [`DocHandle::with_document`]
 //!   will be persisted to storage and synchronized with connected peers
-//!   (subject to the [`AnnouncePolicy`]).
-//! * Any changes received from connected peers will be applied to the
+//!   (subject to the [`SharePolicy`]).
+//! * Changes received from peers granted write access will be applied to the
 //!   document and made visible to the application. You can listen for
 //!   these changes using [`DocHandle::changes`].
 //!
@@ -142,37 +142,55 @@
 //! once the document has been persisted to storage. To look up an existing
 //! document you use [`Repo::find`]. This will first look in storage, then
 //! if the document is not found in storage it will request the document
-//! from all connected peers (again subject to the [`AnnouncePolicy`]). If
+//! from eligible connected peers (subject to the [`SharePolicy`]). If
 //! any peer has the document the future returned by [`Repo::find`] will
 //! resolve once we have synchronized with at least one remote peer which
 //! has the document.
 //!
 //! You can make changes to a document using [`DocHandle::with_document`].
 //!
-//! ### Announce Policies
+//! ### Share Policies
 //!
-//! By default, `samod` will announce all the [`DocHandle`]s it is synchronizing
-//! to all connected peers and will also send requests to any connected peers
-//! when you call [`Repo::find`]. This is often not what you want. To customize
-//! this logic you pass an implementation of [`AnnouncePolicy`] to
-//! [`RepoBuilder::with_announce_policy`]. Note that `AnnouncePolicy` is implemented
-//! for `Fn(&DocumentId) -> bool` so you can just pass a closure if you want.
+//! By default, `samod` grants every connected peer read-write access and
+//! proactively announces documents (or requests missing documents). Configure
+//! [`RepoBuilder::with_share_policy`] to control access and announcements together.
+//! [`SharePolicy`] returns a stream of [`ShareConfig`] decisions. Closures returning
+//! streams, constant `ShareConfig` values, and custom implementations are supported.
 //!
 //! ```rust
 //! # #[cfg(feature="tokio")]
 //! # tokio_test::block_on(async{
-//! let authorized_peer = samod::PeerId::from("alice");
-//! let repo = samod::Repo::build_tokio().with_announce_policy(move |_doc_id, peer_id| {
-//!    // Only announce documents to alice
-//!    &peer_id == &authorized_peer
+//! use samod::{PeerId, Repo, ShareConfig};
+//! let authorized_peer = PeerId::from("alice");
+//! let repo = Repo::build_tokio().with_share_policy(move |_doc_id, peer_id| {
+//!     let config = if peer_id == authorized_peer {
+//!         ShareConfig::read_write()
+//!     } else {
+//!         ShareConfig::read_only().with_announce(false)
+//!     };
+//!     futures::stream::iter([config])
 //! }).load().await;
 //! # });
 //! ```
 //!
+//! Read-only access publishes our changes but ignores changes received from
+//! that peer; it does not prevent local edits. Use [`ShareConfig::none`] to deny
+//! sharing altogether. Disabling announcements alone still allows peers to
+//! initiate sync. Missing documents can only be requested from peers granted
+//! write access with announcements enabled.
+//!
+//! One policy stream is subscribed to per active document/peer pair. Sharing waits
+//! for its first item; later items automatically update all connections to that
+//! peer. The last decision remains active between items and after the stream ends.
+//! An initially empty stream denies sharing. Subscriptions are dropped when the
+//! pair is no longer active or the repo stops; reconnection subscribes anew.
+//! Read-only peers may exchange ephemera, while denied peers may not. Ephemera
+//! sent before the initial decision are dropped.
+//!
 //! ### Authentication
 //!
 //! `samod` operates in terms of [`PeerId`]s. A connection announces itself as
-//! being some [`PeerId`] and the [`AnnouncePolicy`] implementation operates in
+//! being some [`PeerId`] and the [`SharePolicy`] implementation operates in
 //! terms of these [`PeerId`]s. This means that if you want to restrict access
 //! to a document you need to authenticate the [`Transport`] you pass to
 //! [`AcceptorHandle::accept()`] or return from [`Dialer::connect()`] yourself.
@@ -224,18 +242,18 @@
 //! `tokio` is a work-stealing runtime which means that the futures spawned on it
 //! must be [`Send`], so that they can be moved between threads. This means that
 //! [`RuntimeHandle::spawn`] requires [`Send`] futures. This in turn means that
-//! the futures returned by the [`Storage`] and [`AnnouncePolicy`] traits are
-//! also [`Send`] so that they can be spawned onto the [`RuntimeHandle`].
+//! the futures returned by [`Storage`] and streams returned by [`SharePolicy`]
+//! are also [`Send`] so they can be driven on the [`RuntimeHandle`].
 //!
 //! In many cases though, you may have a runtime which doesn't require [`Send`]
-//! futures and you may have storage and announce policy implementations which
-//! cannot produce [`Send`] futures. This would often be the case in single
+//! futures and you may have storage and share policy implementations which
+//! cannot produce [`Send`] futures or streams. This is often the case in single
 //! threaded runtimes for example. In these cases you can instead implement
 //! [`LocalRuntimeHandle`], which doesn't require [`Send`] futures and then
-//! you implement [`LocalStorage`] and [`LocalAnnouncePolicy`] traits for
-//! your storage and announce policy implementations. You configure all these
+//! you implement [`LocalStorage`] and [`LocalSharePolicy`] traits for
+//! your storage and share policy implementations. You configure all these
 //! things via the [`RepoBuilder`] struct. Once you've configured the storage
-//! and announce policy implementations to use local variants you can then
+//! and share policy implementations to use local variants you can then
 //! create a local [`Repo`] using [`RepoBuilder::load_local`].
 //!
 //! ## Concurrency
@@ -366,8 +384,8 @@ mod actor_task;
 use actor_task::ActorTask;
 mod actor_handle;
 use actor_handle::ActorHandle;
-mod announce_policy;
 mod builder;
+mod share_policy;
 pub use builder::RepoBuilder;
 mod acceptor_handle;
 pub use acceptor_handle::{AcceptorEvent, AcceptorHandle};
@@ -396,10 +414,8 @@ mod stopped;
 pub use stopped::Stopped;
 pub mod storage;
 pub mod transport;
-pub use crate::announce_policy::{
-    AlwaysAnnounce, AnnouncePolicy, LocalAnnouncePolicy, NeverAnnounce,
-};
 pub use crate::builder::ConcurrencyConfig;
+pub use crate::share_policy::{LocalSharePolicy, SharePolicy};
 use crate::{
     connection::ConnectionHandle,
     doc_actor_inner::DocActorInner,
@@ -412,6 +428,7 @@ use crate::{
     runtime::{LocalRuntimeHandle, RuntimeHandle},
     storage::{InMemoryStorage, LocalStorage},
 };
+pub use samod_core::{ShareAccess, ShareConfig};
 pub use transport::Transport;
 pub mod runtime;
 #[cfg(feature = "tokio")]
@@ -459,7 +476,7 @@ impl Repo {
     // tasks onto the provided runtime
     pub fn builder<R: runtime::RuntimeHandle>(
         runtime: R,
-    ) -> RepoBuilder<InMemoryStorage, R, AlwaysAnnounce> {
+    ) -> RepoBuilder<InMemoryStorage, R, ShareConfig> {
         builder::RepoBuilder::new(runtime)
     }
 
@@ -469,7 +486,7 @@ impl Repo {
     /// ## Panics
     /// If called outside of the dynamic scope of a tokio runtime
     #[cfg(feature = "tokio")]
-    pub fn build_tokio() -> RepoBuilder<InMemoryStorage, ::tokio::runtime::Handle, AlwaysAnnounce> {
+    pub fn build_tokio() -> RepoBuilder<InMemoryStorage, ::tokio::runtime::Handle, ShareConfig> {
         builder::RepoBuilder::new(::tokio::runtime::Handle::current())
     }
 
@@ -477,7 +494,7 @@ impl Repo {
     // tasks onto a [`futures::executor::LocalPool`]
     pub fn build_localpool(
         spawner: futures::executor::LocalSpawner,
-    ) -> RepoBuilder<InMemoryStorage, futures::executor::LocalSpawner, AlwaysAnnounce> {
+    ) -> RepoBuilder<InMemoryStorage, futures::executor::LocalSpawner, ShareConfig> {
         builder::RepoBuilder::new(spawner)
     }
 
@@ -488,15 +505,15 @@ impl Repo {
     ///
     /// This function will panic if called outside of a gio mainloop context.
     #[cfg(feature = "gio")]
-    pub fn build_gio()
-    -> RepoBuilder<InMemoryStorage, crate::runtime::gio::GioRuntime, AlwaysAnnounce> {
+    pub fn build_gio() -> RepoBuilder<InMemoryStorage, crate::runtime::gio::GioRuntime, ShareConfig>
+    {
         builder::RepoBuilder::new(crate::runtime::gio::GioRuntime::new())
     }
 
     pub(crate) async fn load<
         R: runtime::RuntimeHandle + Clone + Send,
         S: Storage,
-        A: AnnouncePolicy,
+        A: SharePolicy,
     >(
         builder: RepoBuilder<S, R, A>,
     ) -> Self {
@@ -504,13 +521,13 @@ impl Repo {
             storage,
             runtime,
             peer_id,
-            announce_policy,
+            share_policy,
             concurrency,
             observer,
         } = builder;
         let task_setup = TaskSetup::new(storage.clone(), peer_id, concurrency, observer).await;
         let inner = task_setup.inner.clone();
-        task_setup.spawn_tasks(runtime, storage, announce_policy);
+        task_setup.spawn_tasks(runtime, storage, share_policy);
         Self { inner }
     }
 
@@ -518,7 +535,7 @@ impl Repo {
         'a,
         R: runtime::LocalRuntimeHandle + Clone + 'static,
         S: LocalStorage + 'a,
-        A: LocalAnnouncePolicy + 'a,
+        A: LocalSharePolicy + 'a,
     >(
         builder: RepoBuilder<S, R, A>,
     ) -> Self {
@@ -526,13 +543,13 @@ impl Repo {
             storage,
             runtime,
             peer_id,
-            announce_policy,
+            share_policy,
             concurrency,
             observer,
         } = builder;
         let task_setup = TaskSetup::new(storage.clone(), peer_id, concurrency, observer).await;
         let inner = task_setup.inner.clone();
-        task_setup.spawn_tasks_local(runtime, storage, announce_policy);
+        task_setup.spawn_tasks_local(runtime, storage, share_policy);
         Self { inner }
     }
 
@@ -644,7 +661,7 @@ impl Repo {
     ///
     /// The [`Repo`] will first attempt to load the document from [`Storage`] and
     /// if it is not found the [`Repo`] will then request the document from all
-    /// connected peers (subject to the configured [`AnnouncePolicy`]). If any peer
+    /// eligible peers (subject to the configured [`SharePolicy`]). If any peer
     /// responds with the document the future will resolve once we have
     /// synchronized with at least one remote peer which has the document. Otherwise,
     /// the future will resolve to `Ok(None)` once all peers have responded that
@@ -912,6 +929,9 @@ impl Repo {
         let (tx, rx) = oneshot::channel();
         {
             let mut inner = self.inner.lock().unwrap();
+            inner.stopping = true;
+            inner.pending_commands.clear();
+            let _ = inner.tx_io.unbounded_send(IoLoopTask::StopSharePolicies);
             inner.stop_waiters.push(tx);
             inner.handle_event(HubEvent::stop());
         }
@@ -924,6 +944,7 @@ impl Repo {
 }
 
 struct Inner {
+    stopping: bool,
     doc_runner: DocRunner,
     actors: HashMap<DocumentActorId, ActorHandle>,
     hub: Hub,
@@ -1408,6 +1429,7 @@ impl TaskSetup {
 
         let dialers = Arc::new(Mutex::new(HashMap::new()));
         let inner = Arc::new(Mutex::new(Inner {
+            stopping: false,
             doc_runner,
             actors: HashMap::new(),
             hub: *hub,
@@ -1439,19 +1461,19 @@ impl TaskSetup {
     fn spawn_tasks_local<
         R: LocalRuntimeHandle + Clone + 'static,
         S: LocalStorage,
-        A: LocalAnnouncePolicy,
+        A: LocalSharePolicy,
     >(
         self,
         runtime: R,
         storage: S,
-        announce_policy: A,
+        share_policy: A,
     ) {
         runtime.spawn(
             io_loop::io_loop(
                 self.peer_id.clone(),
                 self.inner.clone(),
                 storage,
-                announce_policy,
+                share_policy,
                 self.rx_storage,
                 self.dialers.clone(),
                 self.observer.clone(),
@@ -1482,18 +1504,18 @@ impl TaskSetup {
         }
     }
 
-    fn spawn_tasks<R: RuntimeHandle + Clone + Send, S: Storage, A: AnnouncePolicy>(
+    fn spawn_tasks<R: RuntimeHandle + Clone + Send, S: Storage, A: SharePolicy>(
         self,
         runtime: R,
         storage: S,
-        announce_policy: A,
+        share_policy: A,
     ) {
         runtime.spawn(
             io_loop::io_loop(
                 self.peer_id.clone(),
                 self.inner.clone(),
                 storage,
-                announce_policy,
+                share_policy,
                 self.rx_storage,
                 self.dialers.clone(),
                 self.observer.clone(),

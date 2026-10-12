@@ -149,7 +149,7 @@ async fn non_announcing_peers_dont_sync() {
 
     let alice = Repo::build_tokio()
         .with_peer_id(PeerId::from("alice"))
-        .with_announce_policy(|_doc_id, _peer_id| false)
+        .with_share_policy(samod::ShareConfig::read_write().with_announce(false))
         .load()
         .await;
 
@@ -385,7 +385,7 @@ async fn they_have_our_changes_smoke() {
 
     let bob = Repo::build_tokio()
         .with_peer_id(PeerId::from("bob"))
-        .with_announce_policy(|_, _| false)
+        .with_share_policy(samod::ShareConfig::read_write().with_announce(false))
         .load()
         .await;
 

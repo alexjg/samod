@@ -176,7 +176,9 @@ impl DocHandle {
         self.inner.lock().unwrap().peers()
     }
 
-    /// Wait for a connection to have said they have everything we have
+    /// Wait for a connection to have said they have everything we have.
+    ///
+    /// This may remain pending if sharing is denied or the peer refuses our changes.
     pub fn they_have_our_changes(&self, conn: ConnectionId) -> impl Future<Output = ()> + 'static {
         let inner = self.inner.clone();
         async move {
@@ -205,6 +207,9 @@ impl DocHandle {
         }
     }
 
+    /// Wait until we have all the changes advertised by this connection.
+    ///
+    /// This may remain pending when our share policy denies the peer write access.
     pub fn we_have_their_changes(&self, conn: ConnectionId) -> impl Future<Output = ()> + 'static {
         let inner = self.inner.clone();
         async move {

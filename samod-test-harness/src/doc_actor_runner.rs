@@ -53,7 +53,7 @@ impl DocActorRunner {
         &mut self,
         now: UnixTimestamp,
         storage: &mut Storage,
-        announce_policy: &dyn Fn(DocumentId, PeerId) -> bool,
+        share_policy: &dyn Fn(DocumentId, PeerId) -> samod_core::ShareConfig,
     ) {
         self.handle_completed_storage(now, storage);
         while let Some(event) = self.inbox.pop_front() {
@@ -74,10 +74,10 @@ impl DocActorRunner {
                         storage.handle_task(task.task_id, storage_task);
                         self.pending_storage_tasks.insert(task.task_id);
                     }
-                    DocumentIoTask::CheckAnnouncePolicy { peer_id } => {
+                    DocumentIoTask::CheckSharePolicy { peer_id } => {
                         let io_result = IoResult {
                             task_id: task.task_id,
-                            payload: DocumentIoResult::CheckAnnouncePolicy(announce_policy(
+                            payload: DocumentIoResult::CheckSharePolicy(share_policy(
                                 self.doc_id.clone(),
                                 peer_id,
                             )),

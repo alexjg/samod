@@ -1,3 +1,6 @@
+#[cfg(test)]
+mod tests;
+
 use std::time::{Duration, Instant};
 
 use automerge::{
@@ -5,30 +8,31 @@ use automerge::{
     sync::{self, SyncDoc},
 };
 
-use crate::{ConnectionId, PeerId, UnixTimestamp, network::PeerDocState};
+use crate::actors::messages::SyncMessage;
+use crate::{ConnectionId, PeerId, ShareConfig, UnixTimestamp, network::PeerDocState};
 
 #[derive(Debug)]
 pub(crate) struct PeerDocConnection {
     pub(super) connection_id: ConnectionId,
     pub(super) peer_id: PeerId,
     pub(super) sync_state: sync::State,
-    // Track whether we've ever received a request so that we know whether to
-    // relay the document to the requestor if we obtain the docuemnt after the
-    // request was made
+    // Remember inbound requests or sync attempts, even while denied/paused,
+    // so that granting access can answer them without proactive announcement.
     pub(super) has_requested: bool,
     // Whether this state has changed since the last pop
     dirty: bool,
     state: PeerDocState,
-    // Whether to announce this document to this peer
-    announce_policy: AnnouncePolicy,
+    pub(super) share_policy: SharePolicyState,
+    last_share_config: Option<ShareConfig>,
+    // Preserve message ordering while the asynchronous policy lookup is pending.
+    pub(super) pending_sync_messages: Vec<(SyncMessage, UnixTimestamp)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum AnnouncePolicy {
+pub(crate) enum SharePolicyState {
     Unknown,
     Loading,
-    Announce,
-    DontAnnounce,
+    Ready(ShareConfig),
 }
 
 impl PeerDocConnection {
@@ -36,16 +40,37 @@ impl PeerDocConnection {
         Self {
             connection_id,
             peer_id,
-            sync_state: sync::State::new(),
+            sync_state: sync::State::new_read_only(),
             has_requested: false,
             state: PeerDocState::empty(),
             dirty: false,
-            announce_policy: AnnouncePolicy::Unknown,
+            share_policy: SharePolicyState::Unknown,
+            last_share_config: None,
+            pending_sync_messages: Vec::new(),
         }
     }
 
     pub(super) fn reset_sync_state(&mut self) {
-        self.sync_state = sync::State::new();
+        self.sync_state = if self.can_write() {
+            sync::State::new()
+        } else {
+            sync::State::new_read_only()
+        };
+    }
+
+    pub(super) fn prepare_request(&mut self) {
+        // Initial requests already have a fresh state. Automerge has no explicit
+        // API to restart synchronization, so for retries we force a read-only to
+        // read-write transition. This resets local bookkeeping and tells the
+        // remote to resend changes; replacing the state alone would not do that.
+        if self.state.last_sent.is_some() || self.state.last_received.is_some() {
+            self.sync_state.set_read_only(true);
+            self.sync_state.set_read_only(false);
+            self.state.shared_heads = Some(self.sync_state.shared_heads.clone());
+            self.state.their_heads = self.sync_state.their_heads.clone();
+            self.state.peer_read_only = self.sync_state.is_peer_read_only();
+            self.dirty = true;
+        }
     }
 
     pub(super) fn mark_requested(&mut self) {
@@ -53,10 +78,6 @@ impl PeerDocConnection {
             self.has_requested = true;
             self.dirty = true; // Mark as dirty since the request status changed
         }
-    }
-
-    pub(super) fn has_requested(&self) -> bool {
-        self.has_requested
     }
 
     pub(super) fn receive_sync_message(
@@ -73,24 +94,42 @@ impl PeerDocConnection {
         self.state.last_acked_heads = self.sync_state.their_heads.clone();
         self.state.shared_heads = Some(self.sync_state.shared_heads.clone());
         self.state.their_heads = self.sync_state.their_heads.clone();
+        self.state.peer_read_only = self.sync_state.is_peer_read_only();
         Ok(duration)
     }
 
-    pub(super) fn generate_sync_message(
+    /// Generate messages in wire order, with timing for each message.
+    pub(super) fn generate_sync_messages(
         &mut self,
         now: UnixTimestamp,
         doc: &Automerge,
-    ) -> Option<(sync::Message, Duration)> {
-        let start = Instant::now();
-        let message = doc.generate_sync_message(&mut self.sync_state);
-        let duration = start.elapsed();
-        if let Some(msg) = &message {
+    ) -> Vec<(sync::Message, Duration)> {
+        let heads = doc.get_heads();
+        let mut messages = Vec::new();
+        loop {
+            let start = Instant::now();
+            let Some(msg) = doc.generate_sync_message(&mut self.sync_state) else {
+                break;
+            };
+            let duration = start.elapsed();
+            let follow_up = msg.heads != heads;
+            if follow_up {
+                // Automerge 0.12's fallback reset advertises empty heads but
+                // records the real heads as sent. An empty peer may not reply.
+                // Correct the bookkeeping to what we actually advertised, then
+                // immediately generate the real-heads follow-up in this batch.
+                self.sync_state.last_sent_heads.clone_from(&msg.heads);
+            }
             self.state.last_sent = Some(now);
             self.state.last_sent_heads = Some(msg.heads.clone());
             self.state.shared_heads = Some(self.sync_state.shared_heads.clone());
             self.dirty = true;
+            messages.push((msg, duration));
+            if !follow_up {
+                break;
+            }
         }
-        message.map(|msg| (msg, duration))
+        messages
     }
 
     pub(super) fn their_heads(&self) -> Option<Vec<automerge::ChangeHash>> {
@@ -110,11 +149,76 @@ impl PeerDocConnection {
         &self.state
     }
 
-    pub(super) fn announce_policy(&self) -> AnnouncePolicy {
-        self.announce_policy
+    /// Bound buffering while an application-provided policy future is pending.
+    /// Permit one oversized message so a legitimate full-document sync is not
+    /// limited by this queue's byte budget; transports should bound frame size.
+    pub(super) fn buffer_sync_message(
+        &mut self,
+        msg: SyncMessage,
+        received_at: UnixTimestamp,
+    ) -> bool {
+        const MAX_MESSAGES: usize = 64;
+        const MAX_BYTES: usize = 16 * 1024 * 1024;
+        let message_bytes = |msg: &SyncMessage| match msg {
+            SyncMessage::Sync { data } | SyncMessage::Request { data } => data.len(),
+            SyncMessage::DocUnavailable => 0,
+        };
+        let queued_bytes = self
+            .pending_sync_messages
+            .iter()
+            .fold(0usize, |bytes, (msg, _)| {
+                bytes.saturating_add(message_bytes(msg))
+            });
+        if self.pending_sync_messages.len() >= MAX_MESSAGES
+            || (!self.pending_sync_messages.is_empty()
+                && queued_bytes.saturating_add(message_bytes(&msg)) > MAX_BYTES)
+        {
+            return false;
+        }
+        self.pending_sync_messages.push((msg, received_at));
+        true
     }
 
-    pub(super) fn set_announce_policy(&mut self, policy: AnnouncePolicy) {
-        self.announce_policy = policy;
+    pub(super) fn share_config(&self) -> Option<ShareConfig> {
+        match self.share_policy {
+            SharePolicyState::Ready(config) => Some(config),
+            _ => None,
+        }
+    }
+
+    pub(super) fn can_read(&self) -> bool {
+        self.share_config().is_some_and(|config| config.can_read())
+    }
+
+    pub(super) fn can_write(&self) -> bool {
+        self.share_config().is_some_and(|config| config.can_write())
+    }
+
+    pub(super) fn can_send(&self) -> bool {
+        self.can_read()
+            && (self.has_requested
+                || self.sync_state.their_heads.is_some()
+                || self.share_config().is_some_and(|config| config.announce))
+    }
+
+    pub(super) fn set_share_config(&mut self, config: ShareConfig) -> Option<ShareConfig> {
+        let previous = self.last_share_config.replace(config);
+        self.share_policy = SharePolicyState::Ready(config);
+        if self.state.last_sent.is_none() && self.state.last_received.is_none() {
+            // Initialize sessions which have not exchanged any sync messages yet.
+            self.reset_sync_state();
+        } else {
+            if previous.is_some_and(|old| !old.can_read()) && config.can_read() {
+                // Denial may have dropped messages; restart the exchange on re-grant.
+                self.sync_state.set_read_only(false);
+            }
+            self.sync_state.set_read_only(!config.can_write());
+            self.state.shared_heads = Some(self.sync_state.shared_heads.clone());
+            self.state.their_heads = self.sync_state.their_heads.clone();
+            self.state.peer_read_only = self.sync_state.is_peer_read_only();
+        }
+        self.state.share_config = Some(config);
+        self.dirty = true;
+        previous
     }
 }

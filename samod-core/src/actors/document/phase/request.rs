@@ -4,11 +4,8 @@ use std::time::Duration;
 use automerge::{Automerge, ChangeHash, ReadDoc, sync};
 
 use crate::{
-    ConnectionId, DocumentId, PeerRequestState, UnixTimestamp,
-    actors::{
-        document::peer_doc_connection::{AnnouncePolicy, PeerDocConnection},
-        messages::SyncMessage,
-    },
+    ConnectionId, DocumentId, PeerRequestState, ShareConfig, UnixTimestamp,
+    actors::{document::peer_doc_connection::PeerDocConnection, messages::SyncMessage},
 };
 
 #[derive(Debug)]
@@ -21,30 +18,36 @@ pub(crate) struct Request {
 #[derive(Debug)]
 struct Peer {
     state: PeerState,
+    policy_pending: bool,
 }
 
 #[derive(Debug)]
 enum PeerState {
     Requesting(Requesting),
-    RequestedFromUs { unavailable_response_sent: bool },
+    RequestedFromUs {
+        unavailable_response_sent: bool,
+        blocked_by_policy: bool,
+    },
     Unavailable,
-    Syncing { their_heads: Vec<ChangeHash> },
+    Syncing {
+        their_heads: Vec<ChangeHash>,
+    },
 }
 
 #[derive(Debug)]
 enum Requesting {
     AwaitingSend,
     Sent,
-    AwaitingAnnouncePolicy,
-    NotSentDueToAnnouncePolicy,
+    AwaitingSharePolicy,
+    BlockedByPolicy,
 }
 
-impl From<AnnouncePolicy> for Requesting {
-    fn from(value: AnnouncePolicy) -> Self {
+impl From<Option<ShareConfig>> for Requesting {
+    fn from(value: Option<ShareConfig>) -> Self {
         match value {
-            AnnouncePolicy::DontAnnounce => Requesting::NotSentDueToAnnouncePolicy,
-            AnnouncePolicy::Announce => Requesting::AwaitingSend,
-            AnnouncePolicy::Loading | AnnouncePolicy::Unknown => Requesting::AwaitingAnnouncePolicy,
+            Some(config) if config.can_request() => Requesting::AwaitingSend,
+            Some(_) => Requesting::BlockedByPolicy,
+            None => Requesting::AwaitingSharePolicy,
         }
     }
 }
@@ -71,7 +74,8 @@ impl Request {
                     (
                         c.connection_id,
                         Peer {
-                            state: PeerState::Requesting(c.announce_policy().into()),
+                            state: PeerState::Requesting(c.share_config().into()),
+                            policy_pending: c.share_config().is_none(),
                         },
                     )
                 })
@@ -84,7 +88,8 @@ impl Request {
         self.peer_states.insert(
             conn.connection_id,
             Peer {
-                state: PeerState::Requesting(conn.announce_policy().into()),
+                state: PeerState::Requesting(conn.share_config().into()),
+                policy_pending: conn.share_config().is_none(),
             },
         );
     }
@@ -104,10 +109,20 @@ impl Request {
             tracing::warn!(connection_id=?conn.connection_id, "received message for unknown connection");
             return None;
         };
+        // Track the peer's sync state (and advertise our read-only flag), but
+        // do not enter Syncing and wait for heads we refuse to apply. Retaining
+        // their heads also lets us respond if we later obtain the document
+        // elsewhere, even with announcements disabled.
+        if !conn.can_write()
+            && let SyncMessage::Sync { data } = &msg
+        {
+            return apply_sync_data(now, doc, conn, peer, data);
+        }
         match (msg, &mut peer.state) {
             (SyncMessage::Request { .. }, PeerState::Requesting { .. }) => {
                 peer.state = PeerState::RequestedFromUs {
                     unavailable_response_sent: false,
+                    blocked_by_policy: !conn.can_write(),
                 };
                 None
             }
@@ -158,24 +173,49 @@ impl Request {
         }
     }
 
-    pub(crate) fn generate_message(
+    pub(crate) fn generate_messages(
         &mut self,
         now: UnixTimestamp,
         doc: &Automerge,
         conn: &mut PeerDocConnection,
-    ) -> Option<(SyncMessage, Duration)> {
+    ) -> Vec<(SyncMessage, Duration)> {
+        if !conn.can_read() {
+            return Vec::new();
+        }
+        if !conn.can_write() && conn.their_heads().is_some() {
+            return conn
+                .generate_sync_messages(now, doc)
+                .into_iter()
+                .map(|(msg, duration)| (SyncMessage::Sync { data: msg.encode() }, duration))
+                .collect();
+        }
         let any_peer_is_syncing = self
             .peer_states
             .values()
-            .any(|s| matches!(s.state, PeerState::Syncing { .. }));
+            .any(|s| !s.policy_pending && matches!(s.state, PeerState::Syncing { .. }));
         let Some(peer) = self.peer_states.get_mut(&conn.connection_id) else {
             tracing::warn!(conn_id=?conn.connection_id, "no peer state for connection ID");
-            return None;
+            return Vec::new();
         };
         match &mut peer.state {
+            PeerState::Requesting(Requesting::BlockedByPolicy)
+                if conn.can_write() && conn.can_send() =>
+            {
+                // Resume an inbound sync after a grant, without proactively
+                // announcing/requesting a document the peer did not ask about.
+                let generated: Vec<_> = conn
+                    .generate_sync_messages(now, doc)
+                    .into_iter()
+                    .map(|(msg, duration)| (SyncMessage::Sync { data: msg.encode() }, duration))
+                    .collect();
+                if !generated.is_empty() {
+                    peer.state = PeerState::Requesting(Requesting::Sent);
+                }
+                generated
+            }
             PeerState::Requesting(requesting) => {
                 if !matches!(requesting, Requesting::AwaitingSend) {
-                    return None;
+                    return Vec::new();
                 }
                 // If we're already syncing with another peer, don't send a request yet.
                 // Otherwise we end up in a situation where in topologies like this:
@@ -188,25 +228,41 @@ impl Request {
                 // response back to derek because from her perspective all connected
                 // peers have requested a document she doesn't have
                 if any_peer_is_syncing {
-                    return None;
+                    return Vec::new();
                 }
-                conn.reset_sync_state();
+                conn.prepare_request();
                 *requesting = Requesting::Sent;
-                conn.generate_sync_message(now, doc)
-                    .map(|(msg, duration)| (SyncMessage::Request { data: msg.encode() }, duration))
+                conn.generate_sync_messages(now, doc)
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, (msg, duration))| {
+                        let data = msg.encode();
+                        // Only the first message initiates the request; the
+                        // remainder of the batch continues the sync exchange.
+                        let msg = if index == 0 {
+                            SyncMessage::Request { data }
+                        } else {
+                            SyncMessage::Sync { data }
+                        };
+                        (msg, duration)
+                    })
+                    .collect()
             }
             PeerState::Syncing { .. } => conn
-                .generate_sync_message(now, doc)
-                .map(|(msg, duration)| (SyncMessage::Sync { data: msg.encode() }, duration)),
-            PeerState::Unavailable => None,
+                .generate_sync_messages(now, doc)
+                .into_iter()
+                .map(|(msg, duration)| (SyncMessage::Sync { data: msg.encode() }, duration))
+                .collect(),
+            PeerState::Unavailable => Vec::new(),
             PeerState::RequestedFromUs {
                 unavailable_response_sent,
+                ..
             } => {
                 if *unavailable_response_sent {
-                    None
+                    Vec::new()
                 } else {
                     *unavailable_response_sent = true;
-                    Some((SyncMessage::DocUnavailable, Duration::default()))
+                    vec![(SyncMessage::DocUnavailable, Duration::default())]
                 }
             }
         }
@@ -214,16 +270,18 @@ impl Request {
 
     pub(crate) fn outcome(&self, doc: &Automerge) -> RequestOutcome {
         let all_peers_unavailable = self.peer_states.values().all(|peer| {
-            matches!(
-                peer.state,
-                PeerState::Unavailable
-                    | PeerState::RequestedFromUs { .. }
-                    | PeerState::Requesting(Requesting::NotSentDueToAnnouncePolicy)
-            )
+            !peer.policy_pending
+                && matches!(
+                    peer.state,
+                    PeerState::Unavailable
+                        | PeerState::RequestedFromUs { .. }
+                        | PeerState::Requesting(Requesting::BlockedByPolicy)
+                )
         });
 
         let any_sync_is_done = self.peer_states.values().any(|peer| {
-            matches!(&peer.state, PeerState::Syncing { their_heads }
+            !peer.policy_pending
+                && matches!(&peer.state, PeerState::Syncing { their_heads }
                 if their_heads.iter().all(|head| doc.get_change_by_hash(head).is_some()))
         });
 
@@ -242,38 +300,59 @@ impl Request {
         self.peer_states
             .iter()
             .map(|(conn_id, peer)| {
-                let state = match &peer.state {
-                    PeerState::Requesting(_) | PeerState::RequestedFromUs { .. } => {
-                        PeerRequestState::Requested
+                let state = if peer.policy_pending {
+                    PeerRequestState::Requested
+                } else {
+                    match &peer.state {
+                        PeerState::Requesting(Requesting::BlockedByPolicy)
+                        | PeerState::RequestedFromUs {
+                            blocked_by_policy: true,
+                            ..
+                        } => PeerRequestState::BlockedByPolicy,
+                        PeerState::Requesting(_) | PeerState::RequestedFromUs { .. } => {
+                            PeerRequestState::Requested
+                        }
+                        PeerState::Unavailable => PeerRequestState::Unavailable,
+                        PeerState::Syncing { .. } => PeerRequestState::Syncing,
                     }
-                    PeerState::Unavailable => PeerRequestState::Unavailable,
-                    PeerState::Syncing { .. } => PeerRequestState::Syncing,
                 };
                 (*conn_id, state)
             })
             .collect()
     }
 
-    pub(crate) fn announce_policy_changed(&mut self, peer: ConnectionId, policy: AnnouncePolicy) {
+    pub(crate) fn share_policy_changed(
+        &mut self,
+        peer: ConnectionId,
+        previous: Option<ShareConfig>,
+        config: ShareConfig,
+    ) {
         let Some(peer) = self.peer_states.get_mut(&peer) else {
             return;
         };
-        if let PeerState::Requesting(requesting) = &peer.state {
-            match requesting {
-                Requesting::AwaitingAnnouncePolicy => match policy {
-                    AnnouncePolicy::Announce => {
-                        peer.state = PeerState::Requesting(Requesting::AwaitingSend);
-                    }
-                    AnnouncePolicy::DontAnnounce => {
-                        peer.state = PeerState::Requesting(Requesting::NotSentDueToAnnouncePolicy);
-                    }
-                    _ => {}
-                },
-                Requesting::NotSentDueToAnnouncePolicy if policy == AnnouncePolicy::Announce => {
-                    peer.state = PeerState::Requesting(Requesting::AwaitingSend);
-                }
-                _ => {}
-            }
+        peer.policy_pending = false;
+        if matches!(
+            peer.state,
+            PeerState::Requesting(Requesting::AwaitingSharePolicy)
+        ) {
+            peer.state = PeerState::Requesting(Some(config).into());
+        } else if previous == Some(config) {
+            // An unchanged decision must not restart an in-progress exchange.
+        } else if !config.can_write() || previous.is_some_and(|old| !old.can_write()) {
+            peer.state = PeerState::Requesting(Some(config).into());
+        } else if config.can_request()
+            && matches!(
+                peer.state,
+                PeerState::Requesting(Requesting::BlockedByPolicy)
+                    | PeerState::Unavailable
+                    | PeerState::RequestedFromUs { .. }
+            )
+        {
+            peer.state = PeerState::Requesting(Requesting::AwaitingSend);
+        } else if !config.can_request()
+            && matches!(peer.state, PeerState::Requesting(Requesting::AwaitingSend))
+        {
+            peer.state = PeerState::Requesting(Requesting::BlockedByPolicy);
         }
     }
 }

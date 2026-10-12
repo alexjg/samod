@@ -57,6 +57,11 @@ impl From<samod_core::network::ConnectionState> for ConnectionState {
 /// The state of sycnhronization of a document with a remote peer obtained via [`RepoHandle::peer_doc_state`](crate::RepoHandle::peer_doc_state)
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd)]
 pub struct PeerDocState {
+    /// Our sharing decision; `None` while the policy check is pending.
+    pub share_config: Option<crate::ShareConfig>,
+    /// Whether the peer has advertised that it ignores our incoming changes.
+    /// `false` does not imply that the peer has granted us write access.
+    pub peer_read_only: bool,
     /// When we last received a message from this peer
     pub last_received: Option<chrono::DateTime<chrono::Utc>>,
     /// When we last sent a message to this peer
@@ -74,6 +79,8 @@ pub struct PeerDocState {
 impl From<samod_core::network::PeerDocState> for PeerDocState {
     fn from(value: samod_core::network::PeerDocState) -> Self {
         PeerDocState {
+            share_config: value.share_config,
+            peer_read_only: value.peer_read_only,
             last_received: value
                 .last_received
                 .map(|t| DateTime::from_timestamp_millis(t.as_millis() as i64).unwrap()),

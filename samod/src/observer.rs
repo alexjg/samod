@@ -66,7 +66,7 @@ pub enum RepoEvent {
     ConnectionLost {
         connection_id: ConnectionId,
     },
-    /// Number of sync messages pending during the Loading phase.
+    /// Number of sync messages waiting for storage loading or a sharing decision.
     DocumentPendingSyncMessages {
         document_id: DocumentId,
         count: usize,

@@ -4,10 +4,7 @@ use automerge::{Automerge, sync};
 
 use crate::{
     UnixTimestamp,
-    actors::{
-        document::peer_doc_connection::{AnnouncePolicy, PeerDocConnection},
-        messages::SyncMessage,
-    },
+    actors::{document::peer_doc_connection::PeerDocConnection, messages::SyncMessage},
 };
 
 #[derive(Debug)]
@@ -49,22 +46,18 @@ impl Ready {
         }
     }
 
-    pub(crate) fn generate_sync_message(
+    pub(crate) fn generate_sync_messages(
         &mut self,
         now: UnixTimestamp,
         doc: &mut Automerge,
         conn: &mut PeerDocConnection,
-    ) -> Option<(SyncMessage, Duration)> {
-        if conn.their_heads().is_none()
-            && !conn.has_requested()
-            && conn.announce_policy() != AnnouncePolicy::Announce
-        {
-            // if we haven't received a sync message from them, and they don't
-            // already have the document and the announce policy is set to not
-            // announce, then we don't want to send a sync message
-            return None;
+    ) -> Vec<(SyncMessage, Duration)> {
+        if !conn.can_send() {
+            return Vec::new();
         }
-        conn.generate_sync_message(now, doc)
+        conn.generate_sync_messages(now, doc)
+            .into_iter()
             .map(|(msg, duration)| (SyncMessage::Sync { data: msg.encode() }, duration))
+            .collect()
     }
 }

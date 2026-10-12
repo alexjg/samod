@@ -206,6 +206,8 @@ pub use network::{
     ListenerConfig, ListenerId,
 };
 mod peer_id;
+mod share_config;
+pub use share_config::{ShareAccess, ShareConfig};
 
 pub use actors::document::{CompactionHash, DocumentActorId, SyncDirection, SyncMessageStat};
 pub use document_changed::DocumentChanged;

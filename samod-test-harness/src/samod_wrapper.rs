@@ -38,7 +38,7 @@ pub struct SamodWrapper {
     document_actors: HashMap<DocumentActorId, DocActorRunner>,
     // Connection events captured during event processing
     connection_events: Vec<ConnectionEvent>,
-    announce_policy: Box<dyn Fn(DocumentId, PeerId) -> bool>,
+    share_policy: Box<dyn Fn(DocumentId, PeerId) -> samod_core::ShareConfig>,
     /// A test listener ID used for incoming connections.
     test_listener_id: Option<ListenerId>,
     /// Track the latest `DocSearch` per document as emitted by the hub.
@@ -87,7 +87,7 @@ impl SamodWrapper {
             outbox: HashMap::new(),
             document_actors: HashMap::new(),
             connection_events: Vec::new(),
-            announce_policy: Box::new(|_, _| true),
+            share_policy: Box::new(|_, _| samod_core::ShareConfig::default()),
             test_listener_id: None,
             latest_search_states: HashMap::new(),
         }
@@ -251,6 +251,16 @@ impl SamodWrapper {
         }
     }
 
+    pub fn update_share_policy(
+        &mut self,
+        document_id: DocumentId,
+        peer_id: PeerId,
+        config: samod_core::ShareConfig,
+    ) {
+        self.inbox
+            .push_back(HubEvent::update_share_policy(document_id, peer_id, config));
+    }
+
     pub fn start_search_document(&mut self, document_id: &DocumentId) -> CommandId {
         let DispatchedCommand { command_id, event } = HubEvent::search_for_doc(document_id.clone());
         self.inbox.push_back(event);
@@ -278,7 +288,7 @@ impl SamodWrapper {
 
     pub fn handle_events(&mut self) {
         for (actor_id, runner) in &mut self.document_actors {
-            runner.handle_events(self.now, &mut self.storage, &self.announce_policy);
+            runner.handle_events(self.now, &mut self.storage, &self.share_policy);
             self.inbox.extend(
                 runner
                     .take_outbox()
@@ -341,7 +351,7 @@ impl SamodWrapper {
 
             let mut stopped = Vec::new();
             for (actor_id, runner) in &mut self.document_actors {
-                runner.handle_events(self.now, &mut self.storage, &self.announce_policy);
+                runner.handle_events(self.now, &mut self.storage, &self.share_policy);
                 self.inbox.extend(
                     runner
                         .take_outbox()
@@ -531,8 +541,11 @@ impl SamodWrapper {
         self.hub.peer_id()
     }
 
-    pub fn set_announce_policy(&mut self, policy: Box<dyn Fn(DocumentId, PeerId) -> bool>) {
-        self.announce_policy = policy;
+    pub fn set_share_policy(
+        &mut self,
+        policy: Box<dyn Fn(DocumentId, PeerId) -> samod_core::ShareConfig>,
+    ) {
+        self.share_policy = policy;
     }
 
     pub fn broadcast(&mut self, actor_id: DocumentActorId, msg: Vec<u8>) {

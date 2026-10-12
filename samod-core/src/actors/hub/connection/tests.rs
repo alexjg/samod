@@ -146,6 +146,29 @@ impl Fixture {
 }
 
 #[test]
+fn document_resource_limit_disconnects_transport_and_notifies_actors() {
+    use crate::actors::messages::{DocToHubMsg, DocToHubMsgPayload};
+    for direction in [ConnDirection::Incoming, ConnDirection::Outgoing] {
+        let mut f = Fixture::new(direction, None);
+        f.handshake("remote");
+        let created = f.event(HubEvent::create_document(automerge::Automerge::new()).event);
+        let actor_id = created.spawn_actors[0].actor_id();
+        let reason = "too many sync messages waiting for share policy";
+        let result = f.event(HubEvent::actor_message(
+            actor_id,
+            DocToHubMsg(DocToHubMsgPayload::Disconnect {
+                connection_id: f.connection,
+                reason: reason.into(),
+            }),
+        ));
+        f.assert_disconnected(&result, reason);
+        assert!(result.actor_messages.iter().any(|(id, msg)| *id == actor_id && matches!(
+            msg.0, HubToDocMsgPayload::ConnectionClosed { connection_id } if connection_id == f.connection
+        )));
+    }
+}
+
+#[test]
 fn handshake_identity_is_pinned_in_both_directions() {
     for direction in [ConnDirection::Incoming, ConnDirection::Outgoing] {
         let mut f = Fixture::new(direction, Some("remote"));

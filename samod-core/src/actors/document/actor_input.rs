@@ -14,6 +14,10 @@ use crate::{
 #[derive(Debug)]
 pub(crate) enum ActorInput {
     Terminate,
+    UpdateSharePolicy {
+        peer_id: crate::PeerId,
+        config: crate::ShareConfig,
+    },
     /// Handle incoming sync message
     HandleDocMessage {
         connection_id: crate::ConnectionId,
@@ -36,6 +40,9 @@ impl From<HubToDocMsgPayload> for ActorInput {
     fn from(message: HubToDocMsgPayload) -> Self {
         match message {
             HubToDocMsgPayload::Terminate => ActorInput::Terminate,
+            HubToDocMsgPayload::UpdateSharePolicy { peer_id, config } => {
+                ActorInput::UpdateSharePolicy { peer_id, config }
+            }
             HubToDocMsgPayload::HandleDocMessage {
                 connection_id,
                 message,
