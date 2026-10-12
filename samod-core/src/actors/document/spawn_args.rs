@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 
-use crate::{ConnectionId, DocumentActorId, PeerId, actors::messages::DocMessage};
+use crate::{
+    CompactionPolicy, ConnectionId, DocumentActorId, PeerId, actors::messages::DocMessage,
+};
 
 #[derive(Clone)]
 pub struct SpawnArgs {
@@ -9,6 +11,7 @@ pub struct SpawnArgs {
     pub(crate) document_id: crate::DocumentId,
     pub(crate) initial_content: Option<automerge::Automerge>,
     pub(crate) initial_connections: HashMap<ConnectionId, (PeerId, Option<DocMessage>)>,
+    pub(crate) compaction_policy: CompactionPolicy,
 }
 
 impl std::fmt::Debug for SpawnArgs {
@@ -22,6 +25,7 @@ impl std::fmt::Debug for SpawnArgs {
                 &self.initial_content.as_ref().map(|_| "<Automerge>"),
             )
             .field("initial_connections", &self.initial_connections)
+            .field("compaction_policy", &self.compaction_policy)
             .finish()
     }
 }

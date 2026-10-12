@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use samod_core::{PeerId, ShareConfig};
+use samod_core::{CompactionPolicy, PeerId, ShareConfig};
 
 use crate::{
     Repo,
@@ -43,6 +43,7 @@ pub struct RepoBuilder<S, R, A> {
     pub(crate) peer_id: Option<PeerId>,
     pub(crate) concurrency: ConcurrencyConfig,
     pub(crate) observer: Option<Arc<dyn RepoObserver>>,
+    pub(crate) compaction_policy: CompactionPolicy,
 }
 
 impl<S, R, A> RepoBuilder<S, R, A> {
@@ -54,6 +55,7 @@ impl<S, R, A> RepoBuilder<S, R, A> {
             share_policy: self.share_policy,
             concurrency: self.concurrency,
             observer: self.observer,
+            compaction_policy: self.compaction_policy,
         }
     }
 
@@ -65,6 +67,7 @@ impl<S, R, A> RepoBuilder<S, R, A> {
             share_policy: self.share_policy,
             concurrency: self.concurrency,
             observer: self.observer,
+            compaction_policy: self.compaction_policy,
         }
     }
 
@@ -83,6 +86,7 @@ impl<S, R, A> RepoBuilder<S, R, A> {
             share_policy,
             concurrency: self.concurrency,
             observer: self.observer,
+            compaction_policy: self.compaction_policy,
         }
     }
 
@@ -92,6 +96,15 @@ impl<S, R, A> RepoBuilder<S, R, A> {
     /// documentation
     pub fn with_concurrency(mut self, concurrency: ConcurrencyConfig) -> Self {
         self.concurrency = concurrency;
+        self
+    }
+
+    /// Set the [`CompactionPolicy`]
+    ///
+    /// Building the repo panics if `policy.incremental_fraction` is negative
+    /// or NaN.
+    pub fn with_compaction_policy(mut self, policy: CompactionPolicy) -> Self {
+        self.compaction_policy = policy;
         self
     }
 
@@ -111,6 +124,7 @@ impl<R> RepoBuilder<InMemoryStorage, R, ShareConfig> {
             share_policy: ShareConfig::default(),
             concurrency: ConcurrencyConfig::AsyncRuntime,
             observer: None,
+            compaction_policy: CompactionPolicy::default(),
         }
     }
 }

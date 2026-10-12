@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use automerge::{Automerge, AutomergeError, ROOT, transaction::Transactable};
-use samod_core::{CompactionHash, DocumentId, StorageKey};
+use samod_core::{CompactionHash, CompactionPolicy, DocumentId, StorageKey};
 use samod_test_harness::{Network, RunningDocIds};
 
 fn init_logging() {
@@ -115,6 +115,112 @@ fn many_changes_compact_but_do_not_delete_existing_snapshot() {
         .expect("bob should have the document");
 }
 
+fn incompressible_text(len: usize) -> String {
+    use rand::Rng;
+    let mut rng = rand::rng();
+    (0..len)
+        .map(|_| rng.random_range(b'a'..=b'z') as char)
+        .collect()
+}
+
+fn incrementals_on_disk(storage: &HashMap<StorageKey, Vec<u8>>, doc_id: &DocumentId) -> usize {
+    let prefix = StorageKey::incremental_prefix(doc_id);
+    storage.keys().filter(|k| prefix.is_prefix_of(k)).count()
+}
+
+#[test]
+fn small_changes_to_a_large_document_do_not_rewrite_it() {
+    init_logging();
+
+    let doc_id = DocumentId::new(&mut rand::rng());
+    let mut doc = Automerge::new();
+    doc.transact(|tx| {
+        tx.put(ROOT, "text", incompressible_text(100_000))?;
+        Ok::<_, AutomergeError>(())
+    })
+    .unwrap();
+    let hash = CompactionHash::new(&doc.get_heads());
+    let storage = HashMap::from([(StorageKey::snapshot_path(&doc_id, &hash), doc.save())]);
+
+    let mut network = Network::new();
+    let alice = network.create_samod_with_storage("alice", storage);
+    let actor_id = network.samod(&alice).find_document(&doc_id).unwrap();
+
+    for i in 0..50 {
+        network
+            .samod(&alice)
+            .with_document_by_actor(actor_id, |doc| {
+                doc.transact(|tx| {
+                    tx.put(ROOT, "counter", i)?;
+                    Ok::<_, AutomergeError>(())
+                })
+                .unwrap();
+            })
+            .unwrap();
+    }
+    let snapshot = StorageKey::snapshot_prefix(&doc_id);
+    let puts = network.samod(&alice).storage_puts().to_vec();
+    assert!(!puts.iter().any(|k| snapshot.is_prefix_of(k)));
+    assert_eq!(
+        incrementals_on_disk(network.samod(&alice).storage(), &doc_id),
+        50
+    );
+}
+
+#[test]
+fn incremental_files_are_capped_by_the_policy() {
+    init_logging();
+
+    let mut network = Network::new();
+    let alice = network.create_samod_with_compaction(
+        "alice",
+        CompactionPolicy {
+            max_incrementals: 20,
+            ..CompactionPolicy::default()
+        },
+    );
+    let RunningDocIds { actor_id, doc_id } = network.samod(&alice).create_document();
+    let text = incompressible_text(100_000);
+    network
+        .samod(&alice)
+        .with_document_by_actor(actor_id, |doc| {
+            doc.transact(|tx| {
+                tx.put(ROOT, "text", text.as_str())?;
+                Ok::<_, AutomergeError>(())
+            })
+            .unwrap();
+        })
+        .unwrap();
+
+    for i in 0..50 {
+        network
+            .samod(&alice)
+            .with_document_by_actor(actor_id, |doc| {
+                doc.transact(|tx| {
+                    tx.put(ROOT, "counter", i)?;
+                    Ok::<_, AutomergeError>(())
+                })
+                .unwrap();
+            })
+            .unwrap();
+        let on_disk = incrementals_on_disk(network.samod(&alice).storage(), &doc_id);
+        assert!(on_disk <= 20, "{on_disk} incremental files on disk");
+    }
+    let heads = network
+        .samod(&alice)
+        .with_document_by_actor(actor_id, |doc| doc.get_heads())
+        .unwrap();
+
+    let storage = network.samod(&alice).storage().clone();
+    let alice2 = network.create_samod_with_storage("alice2", storage);
+    let actor = network.samod(&alice2).find_document(&doc_id).unwrap();
+    let reloaded = network
+        .samod(&alice2)
+        .with_document_by_actor(actor, |doc| doc.get_heads())
+        .unwrap();
+    assert_eq!(heads, reloaded);
+}
+
 #[test]
 fn loading_a_document_does_not_rewrite_it() {
     init_logging();
@@ -154,4 +260,66 @@ fn loading_a_document_does_not_rewrite_it() {
     let puts = network.samod(&alice2).storage_puts().to_vec();
     assert_eq!(puts.len(), 1, "expected one put, got {puts:?}");
     assert!(incremental.is_prefix_of(&puts[0]));
+}
+
+#[test]
+fn small_document_is_not_rewritten_on_every_change() {
+    init_logging();
+
+    let mut network = Network::new();
+    let alice = network.create_samod("alice");
+    let RunningDocIds { actor_id, doc_id } = network.samod(&alice).create_document();
+    let edit = |network: &mut Network, i: usize| {
+        network
+            .samod(&alice)
+            .with_document_by_actor(actor_id, |doc| {
+                doc.transact(|tx| {
+                    tx.put(ROOT, "counter", i as i64)?;
+                    Ok::<_, AutomergeError>(())
+                })
+                .unwrap();
+            })
+            .unwrap();
+    };
+    let snapshot_puts = |network: &mut Network| {
+        let prefix = StorageKey::snapshot_prefix(&doc_id);
+        network
+            .samod(&alice)
+            .storage_puts()
+            .iter()
+            .filter(|k| prefix.is_prefix_of(k))
+            .count()
+    };
+
+    let mut i = 0;
+    while incrementals_on_disk(network.samod(&alice).storage(), &doc_id) < 10 {
+        edit(&mut network, i);
+        i += 1;
+    }
+    assert_eq!(snapshot_puts(&mut network), 0);
+
+    edit(&mut network, i);
+    assert_eq!(snapshot_puts(&mut network), 1);
+}
+
+#[test]
+#[should_panic(expected = "incremental_fraction must be non-negative")]
+fn negative_incremental_fraction_is_rejected() {
+    let _ = samod_core::SamodLoader::new(samod_core::PeerId::from("alice")).with_compaction_policy(
+        CompactionPolicy {
+            incremental_fraction: -1.0,
+            ..CompactionPolicy::default()
+        },
+    );
+}
+
+#[test]
+#[should_panic(expected = "incremental_fraction must be non-negative")]
+fn nan_incremental_fraction_is_rejected() {
+    let _ = samod_core::SamodLoader::new(samod_core::PeerId::from("alice")).with_compaction_policy(
+        CompactionPolicy {
+            incremental_fraction: f64::NAN,
+            ..CompactionPolicy::default()
+        },
+    );
 }

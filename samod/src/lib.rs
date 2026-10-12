@@ -364,8 +364,8 @@ use futures::{
 };
 use rand::SeedableRng;
 pub use samod_core::{
-    AutomergeUrl, BackoffConfig, BadDocumentId, ConnectionId, DialerId, DocSearch, DocumentId,
-    ListenerId, PeerId, PeerRequestState, StorageId, network::ConnDirection,
+    AutomergeUrl, BackoffConfig, BadDocumentId, CompactionPolicy, ConnectionId, DialerId,
+    DocSearch, DocumentId, ListenerId, PeerId, PeerRequestState, StorageId, network::ConnDirection,
 };
 use samod_core::{
     CommandId, CommandResult, DocumentActorId, LoaderState, UnixTimestamp,
@@ -524,8 +524,16 @@ impl Repo {
             share_policy,
             concurrency,
             observer,
+            compaction_policy,
         } = builder;
-        let task_setup = TaskSetup::new(storage.clone(), peer_id, concurrency, observer).await;
+        let task_setup = TaskSetup::new(
+            storage.clone(),
+            peer_id,
+            concurrency,
+            observer,
+            compaction_policy,
+        )
+        .await;
         let inner = task_setup.inner.clone();
         task_setup.spawn_tasks(runtime, storage, share_policy);
         Self { inner }
@@ -546,8 +554,16 @@ impl Repo {
             share_policy,
             concurrency,
             observer,
+            compaction_policy,
         } = builder;
-        let task_setup = TaskSetup::new(storage.clone(), peer_id, concurrency, observer).await;
+        let task_setup = TaskSetup::new(
+            storage.clone(),
+            peer_id,
+            concurrency,
+            observer,
+            compaction_policy,
+        )
+        .await;
         let inner = task_setup.inner.clone();
         task_setup.spawn_tasks_local(runtime, storage, share_policy);
         Self { inner }
@@ -1402,10 +1418,15 @@ impl TaskSetup {
         peer_id: Option<PeerId>,
         concurrency: ConcurrencyConfig,
         observer: Option<Arc<dyn observer::RepoObserver>>,
+        compaction_policy: CompactionPolicy,
     ) -> TaskSetup {
         let mut rng = rand::rngs::StdRng::from_rng(&mut rand::rng());
         let peer_id = peer_id.unwrap_or_else(|| PeerId::new_with_rng(&mut rng));
-        let hub = load_hub(storage.clone(), Hub::load(peer_id.clone())).await;
+        let hub = load_hub(
+            storage.clone(),
+            Hub::load(peer_id.clone()).with_compaction_policy(compaction_policy),
+        )
+        .await;
 
         let (tx_storage, rx_storage) = unbounded::channel();
         let tx_io_for_tick = tx_storage.clone();

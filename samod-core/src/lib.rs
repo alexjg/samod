@@ -209,7 +209,9 @@ mod peer_id;
 mod share_config;
 pub use share_config::{ShareAccess, ShareConfig};
 
-pub use actors::document::{CompactionHash, DocumentActorId, SyncDirection, SyncMessageStat};
+pub use actors::document::{
+    CompactionHash, CompactionPolicy, DocumentActorId, SyncDirection, SyncMessageStat,
+};
 pub use document_changed::DocumentChanged;
 pub use document_id::{BadDocumentId, DocumentId};
 pub mod io;

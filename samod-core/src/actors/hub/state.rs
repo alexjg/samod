@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
 use crate::{
-    ConnectionId, DialerId, DocSearch, DocumentActorId, DocumentId, ListenerId, PeerId, StorageId,
-    UnixTimestamp,
+    CompactionPolicy, ConnectionId, DialerId, DocSearch, DocumentActorId, DocumentId, ListenerId,
+    PeerId, StorageId, UnixTimestamp,
     actors::{
         document::SpawnArgs,
         hub::{
@@ -63,6 +63,8 @@ pub(crate) struct State {
     listeners: HashMap<ListenerId, ListenerState>,
 
     searches: Searches,
+
+    compaction_policy: CompactionPolicy,
 }
 
 impl State {
@@ -70,6 +72,7 @@ impl State {
         storage_id: StorageId,
         peer_id: PeerId,
         ephemeral_session: EphemeralSession,
+        compaction_policy: CompactionPolicy,
     ) -> Self {
         Self {
             storage_id,
@@ -83,6 +86,7 @@ impl State {
             dialers: HashMap::new(),
             listeners: HashMap::new(),
             searches: Searches::new(),
+            compaction_policy,
         }
     }
 
@@ -906,6 +910,7 @@ impl State {
             document_id,
             initial_content: initial_doc,
             initial_connections,
+            compaction_policy: self.compaction_policy,
         });
 
         actor_id

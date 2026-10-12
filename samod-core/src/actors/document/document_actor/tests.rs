@@ -42,6 +42,7 @@ fn new_actor(
             conn,
             ("remote".into(), initial.map(DocMessage::Sync)),
         )]),
+        compaction_policy: crate::CompactionPolicy::default(),
     };
     let (actor, result) = DocumentActor::new(UnixTimestamp::now(), args);
     let policy_task = result

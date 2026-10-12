@@ -36,7 +36,7 @@ pub mod errors;
 pub mod io;
 mod load;
 mod on_disk_state;
-pub use on_disk_state::CompactionHash;
+pub use on_disk_state::{CompactionHash, CompactionPolicy};
 mod peer_doc_connection;
 mod phase;
 mod spawn_args;

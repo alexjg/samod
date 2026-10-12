@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Added
+
+* `CompactionPolicy`, set with `RepoBuilder::with_compaction_policy`
+
+### Changed
+
+* Documents are compacted by size rather than by change count
+
 ### Fixed
 
 * Loading a document no longer saves its loaded history again
