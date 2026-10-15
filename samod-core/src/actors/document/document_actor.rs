@@ -445,6 +445,10 @@ impl DocumentActor {
             .collect()
     }
 
+    pub fn peer_count(&self) -> usize {
+        self.peer_connections.len()
+    }
+
     pub fn conn_peer_id(&self, conn_id: ConnectionId) -> Option<PeerId> {
         self.peer_connections
             .get(&conn_id)
