@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 
 use crate::{ConnectionId, DocumentId, PeerId, UnixTimestamp};
 
@@ -9,7 +9,10 @@ pub struct ConnectionInfo {
     pub last_received: Option<UnixTimestamp>,
     pub last_sent: Option<UnixTimestamp>,
     /// The state of each document we are synchronizing with this peer
-    pub docs: HashMap<DocumentId, PeerDocState>,
+    ///
+    /// This is shared with the hub's internal state so that producing a
+    /// snapshot is cheap even when syncing many documents.
+    pub docs: Arc<HashMap<DocumentId, PeerDocState>>,
     /// Whether we are handshaking or connected with this peer
     pub state: ConnectionState,
 }

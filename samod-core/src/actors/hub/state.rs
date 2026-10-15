@@ -63,6 +63,12 @@ pub(crate) struct State {
     listeners: HashMap<ListenerId, ListenerState>,
 
     searches: Searches,
+
+    /// Connections which have completed their handshake but have not yet been
+    /// subscribed to existing documents. Documents spawned after a connection
+    /// is established are subscribed in `spawn_actor`, so this is the only
+    /// source of missing subscriptions.
+    newly_established: Vec<ConnectionId>,
 }
 
 impl State {
@@ -83,6 +89,7 @@ impl State {
             dialers: HashMap::new(),
             listeners: HashMap::new(),
             searches: Searches::new(),
+            newly_established: Vec::new(),
         }
     }
 
@@ -195,7 +202,7 @@ impl State {
                             },
                         )
                     } else {
-                        (HashMap::new(), ConnectionState::Handshaking)
+                        (Default::default(), ConnectionState::Handshaking)
                     };
                 ConnectionInfo {
                     id: *conn_id,
@@ -253,6 +260,7 @@ impl State {
         let handle = ActorInfo::new_with_id(actor_id, document_id.clone());
         self.actors.insert(actor_id, handle);
         self.document_to_actor.insert(document_id, actor_id);
+        self.searches.mark_dirty(actor_id);
     }
 
     pub(crate) fn find_actor_for_document(&self, document_id: &DocumentId) -> Option<&ActorInfo> {
@@ -286,38 +294,35 @@ impl State {
         };
         actor_info.search_phase = new_phase.clone();
         let doc_id = actor_info.document_id.clone();
+        self.searches.mark_dirty(actor_id);
         if new_phase == DocSearchPhase::Ready {
             self.pending_commands
                 .resolve_pending_create(actor_id, &doc_id);
         }
     }
 
+    /// Subscribe newly established connections to every existing document.
+    ///
+    /// This only visits connections queued in `newly_established`, rather than
+    /// rescanning every connection against every document, which would make
+    /// each hub event cost O(connections * documents).
     pub(crate) fn ensure_connections(&mut self) -> Vec<(DocumentActorId, ConnectionId, PeerId)> {
-        let mut to_connect = Vec::new();
-        for (conn_id, conn) in &mut self.connections {
-            if let Some(established) = conn.established_connection_mut() {
-                for (doc_id, doc_actor) in &self.document_to_actor {
-                    if !established.document_subscriptions().contains_key(doc_id) {
-                        to_connect.push((
-                            established.remote_peer_id().clone(),
-                            *conn_id,
-                            doc_id.clone(),
-                            doc_actor,
-                        ));
-                        established.add_document_subscription(doc_id.clone());
-                    }
+        let mut result = Vec::new();
+        for conn_id in std::mem::take(&mut self.newly_established) {
+            let Some(established) = self
+                .connections
+                .get_mut(&conn_id)
+                .and_then(|c| c.established_connection_mut())
+            else {
+                continue;
+            };
+            for (doc_id, doc_actor) in &self.document_to_actor {
+                if !established.document_subscriptions().contains_key(doc_id) {
+                    established.add_document_subscription(doc_id.clone());
+                    result.push((*doc_actor, conn_id, established.remote_peer_id().clone()));
                 }
             }
         }
-
-        let mut result = Vec::new();
-
-        for (peer_id, conn_id, doc_id, actor) in to_connect {
-            let conn = self.connections.get_mut(&conn_id).unwrap();
-            conn.add_document(doc_id);
-            result.push((*actor, conn_id, peer_id));
-        }
-
         result
     }
 
@@ -463,6 +468,7 @@ impl State {
                         DocToHubMsgPayload::Terminated => {
                             tracing::debug!(?actor_id, "document actor terminated");
                             self.actors.remove(&actor_id);
+                            self.searches.remove(&actor_id);
                         }
                     },
                     HubInput::ConnectionLost { connection_id } => {
@@ -645,6 +651,7 @@ impl State {
             match evt {
                 ReceiveEvent::HandshakeComplete { remote_peer_id } => {
                     tracing::debug!(?connection_id, ?remote_peer_id, "handshake completed");
+                    self.newly_established.push(connection_id);
                     // Reset backoff on successful handshake
                     self.reset_dialer_backoff_for_connection(connection_id);
                     // Emit handshake completed event

@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use crate::{
     ConnectionId, DocumentId, PeerId, UnixTimestamp,
     actors::{hub::HubResults, messages::SyncMessage},
@@ -164,7 +162,7 @@ impl Connection {
                         remote_metadata: metadata.map(PeerMetadata::from_wire),
                         protocol_version: "1".to_string(),
                         established_at: now,
-                        document_subscriptions: HashMap::new(),
+                        document_subscriptions: Default::default(),
                     });
                     vec![ReceiveEvent::HandshakeComplete {
                         remote_peer_id: sender_id,
@@ -218,7 +216,7 @@ impl Connection {
                         remote_metadata: metadata.map(PeerMetadata::from_wire),
                         protocol_version: selected_protocol_version,
                         established_at: now,
-                        document_subscriptions: HashMap::new(),
+                        document_subscriptions: Default::default(),
                     });
                     vec![ReceiveEvent::HandshakeComplete {
                         remote_peer_id: sender_id,
@@ -360,9 +358,7 @@ impl Connection {
         let ConnectionPhase::Established(established) = &mut self.phase else {
             panic!("Cannot add document subscription in non-established phase");
         };
-        established
-            .document_subscriptions
-            .insert(document_id.clone(), PeerDocState::empty());
+        established.add_document_subscription(document_id);
     }
 
     pub(crate) fn update_peer_state(&mut self, document_id: &DocumentId, state: PeerDocState) {
@@ -370,9 +366,8 @@ impl Connection {
             tracing::warn!("attmpeted to update document for non-established connection");
             return;
         };
-        if let Some(doc_state) = established.document_subscriptions.get_mut(document_id) {
+        if established.update_document_state(document_id, state) {
             self.dirty = true;
-            *doc_state = state;
         } else {
             tracing::warn!(?document_id, "tried to update state for unknown document",);
         }
@@ -478,7 +473,7 @@ impl Connection {
                     their_peer_id: established.remote_peer_id().clone(),
                 },
             ),
-            _ => (HashMap::new(), ConnectionState::Handshaking),
+            _ => (Default::default(), ConnectionState::Handshaking),
         };
         ConnectionInfo {
             id: self.id,

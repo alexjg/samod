@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 
 use crate::{
     DocumentId, PeerId, UnixTimestamp,
@@ -20,7 +20,11 @@ pub(crate) struct EstablishedConnection {
     #[allow(dead_code)]
     pub(super) established_at: UnixTimestamp,
     /// Documents this connection is actively syncing
-    pub(super) document_subscriptions: HashMap<DocumentId, PeerDocState>,
+    ///
+    /// Behind an `Arc` so that `ConnectionInfo` snapshots, which are emitted
+    /// after most hub events, don't have to copy the whole map. Mutate via
+    /// `Arc::make_mut`, which only copies if an old snapshot is still alive.
+    pub(super) document_subscriptions: Arc<HashMap<DocumentId, PeerDocState>>,
 }
 
 impl EstablishedConnection {
@@ -29,12 +33,27 @@ impl EstablishedConnection {
         &self.remote_peer_id
     }
 
-    pub(crate) fn document_subscriptions(&self) -> &HashMap<DocumentId, PeerDocState> {
+    pub(crate) fn document_subscriptions(&self) -> &Arc<HashMap<DocumentId, PeerDocState>> {
         &self.document_subscriptions
     }
 
     pub fn add_document_subscription(&mut self, document_id: DocumentId) {
-        self.document_subscriptions
-            .insert(document_id, PeerDocState::empty());
+        Arc::make_mut(&mut self.document_subscriptions).insert(document_id, PeerDocState::empty());
+    }
+
+    pub(super) fn update_document_state(
+        &mut self,
+        document_id: &DocumentId,
+        state: PeerDocState,
+    ) -> bool {
+        if !self.document_subscriptions.contains_key(document_id) {
+            return false;
+        }
+        if let Some(doc_state) =
+            Arc::make_mut(&mut self.document_subscriptions).get_mut(document_id)
+        {
+            *doc_state = state;
+        }
+        true
     }
 }

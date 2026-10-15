@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::{
     DialerId, DocSearchPhase, DocumentActorId,
@@ -11,6 +11,10 @@ use crate::{
 pub(super) struct Searches {
     pub(super) phases: HashMap<DocumentActorId, DocSearchPhase>,
     pub(super) last_dialers: HashMap<DialerId, DialerStatus>,
+    /// Actors whose search phase may have changed since the last call to
+    /// `pop_state_updates`. Only these need to be compared against `phases`
+    /// unless the dialer state has changed.
+    dirty: HashSet<DocumentActorId>,
 }
 
 impl Searches {
@@ -18,11 +22,18 @@ impl Searches {
         Self {
             phases: HashMap::new(),
             last_dialers: HashMap::new(),
+            dirty: HashSet::new(),
         }
     }
 
     pub(super) fn add_search(&mut self, actor: DocumentActorId, phase: DocSearchPhase) {
         self.phases.insert(actor, phase);
+        self.dirty.insert(actor);
+    }
+
+    /// Record that the search phase of `actor` may have changed.
+    pub(super) fn mark_dirty(&mut self, actor: DocumentActorId) {
+        self.dirty.insert(actor);
     }
 
     pub(super) fn pop_state_updates(
@@ -37,14 +48,31 @@ impl Searches {
         let dialers_changed = self.last_dialers != new_dialer_state;
         self.last_dialers = new_dialer_state;
 
+        let dirty = std::mem::take(&mut self.dirty);
         let mut result = HashMap::new();
-        for (actor_id, actor) in actors {
+        let mut check = |actor_id: &DocumentActorId, actor: &ActorInfo| {
             let last_phase = self.phases.get(actor_id);
             if last_phase != Some(&actor.search_phase) || dialers_changed {
                 result.insert(*actor_id, actor.search_phase.clone());
+                self.phases.insert(*actor_id, actor.search_phase.clone());
             }
-            self.phases.insert(*actor_id, actor.search_phase.clone());
+        };
+        if dialers_changed {
+            for (actor_id, actor) in actors {
+                check(actor_id, actor);
+            }
+        } else {
+            for actor_id in &dirty {
+                if let Some(actor) = actors.get(actor_id) {
+                    check(actor_id, actor);
+                }
+            }
         }
         result
+    }
+
+    pub(super) fn remove(&mut self, actor: &DocumentActorId) {
+        self.phases.remove(actor);
+        self.dirty.remove(actor);
     }
 }

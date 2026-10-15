@@ -28,7 +28,11 @@ impl From<samod_core::network::ConnectionInfo> for ConnectionInfo {
             last_sent: value
                 .last_sent
                 .map(|i| DateTime::from_timestamp_millis(i.as_millis() as i64).unwrap()),
-            docs: value.docs.into_iter().map(|(k, v)| (k, v.into())).collect(),
+            docs: value
+                .docs
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone().into()))
+                .collect(),
             state: value.state.into(),
         }
     }

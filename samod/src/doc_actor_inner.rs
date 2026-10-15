@@ -101,7 +101,7 @@ impl DocActorInner {
             pending_sync_messages,
         } = results;
 
-        let peer_count = self.actor.peers().len();
+        let peer_count = self.actor.peer_count();
         let stats = self.actor.document().stats();
         log_sync_message_stats(
             &self.document_id,
