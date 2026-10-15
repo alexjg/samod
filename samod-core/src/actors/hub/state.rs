@@ -260,6 +260,7 @@ impl State {
         let handle = ActorInfo::new_with_id(actor_id, document_id.clone());
         self.actors.insert(actor_id, handle);
         self.document_to_actor.insert(document_id, actor_id);
+        self.searches.mark_dirty(actor_id);
     }
 
     pub(crate) fn find_actor_for_document(&self, document_id: &DocumentId) -> Option<&ActorInfo> {
@@ -293,6 +294,7 @@ impl State {
         };
         actor_info.search_phase = new_phase.clone();
         let doc_id = actor_info.document_id.clone();
+        self.searches.mark_dirty(actor_id);
         if new_phase == DocSearchPhase::Ready {
             self.pending_commands
                 .resolve_pending_create(actor_id, &doc_id);
@@ -466,6 +468,7 @@ impl State {
                         DocToHubMsgPayload::Terminated => {
                             tracing::debug!(?actor_id, "document actor terminated");
                             self.actors.remove(&actor_id);
+                            self.searches.remove(&actor_id);
                         }
                     },
                     HubInput::ConnectionLost { connection_id } => {
