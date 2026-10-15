@@ -954,20 +954,16 @@ impl Inner {
     /// Dispatch a task to a document actor.
     ///
     /// In async mode, this sends the task via the actor's channel stored in DocRunner.
-    /// In threadpool mode, this spawns the task directly on the threadpool.
+    /// In threadpool mode, this enqueues the task in the actor's FIFO mailbox.
     fn dispatch_task(&self, actor_id: DocumentActorId, task: ActorTask) {
         match &self.doc_runner {
             #[cfg(feature = "threadpool")]
-            DocRunner::Threadpool(threadpool) => {
+            DocRunner::Threadpool(_) => {
                 let Some(actor_handle) = self.actors.get(&actor_id) else {
                     tracing::warn!(?actor_id, "received task for unknown actor");
                     return;
                 };
-                let inner = actor_handle.inner.clone();
-                threadpool.spawn(move || {
-                    let mut guard = inner.lock().unwrap();
-                    guard.handle_task(task);
-                });
+                actor_handle.doc.dispatch_task(task);
             }
             DocRunner::Async { task_senders, .. } => {
                 let Some(tx) = task_senders.get(&actor_id) else {
@@ -1262,20 +1258,18 @@ impl Inner {
                 let handle = DocHandle::new(
                     doc_id.clone(),
                     doc_inner.clone(),
-                    doc_handle::DocTaskDispatcher::Threadpool(threadpool.clone()),
+                    doc_handle::DocTaskDispatcher::Threadpool(
+                        doc_runner::threadpool::ThreadpoolActor::new(
+                            doc_inner.clone(),
+                            threadpool.clone(),
+                        ),
+                    ),
                 );
-                self.actors.insert(
-                    actor_id,
-                    ActorHandle {
-                        inner: doc_inner.clone(),
-                        doc: handle,
-                    },
-                );
+                self.actors.insert(actor_id, ActorHandle { doc: handle });
 
-                // In threadpool mode, we process init_results synchronously and then
-                // dispatch subsequent tasks via dispatch_task() which spawns them
-                // directly on the threadpool. This avoids dedicating one thread per
-                // document, which would limit the number of documents to the thread count.
+                // Process initialization before any queued tasks. Subsequent hub,
+                // IO and DocHandle tasks share one FIFO mailbox per document, with
+                // a runner scheduled only while that mailbox has work to do.
                 doc_inner.lock().unwrap().handle_results(init_results);
             }
             DocRunner::Async {
@@ -1291,13 +1285,7 @@ impl Inner {
                     doc_inner.clone(),
                     doc_handle::DocTaskDispatcher::Async(tx),
                 );
-                self.actors.insert(
-                    actor_id,
-                    ActorHandle {
-                        inner: doc_inner.clone(),
-                        doc: handle,
-                    },
-                );
+                self.actors.insert(actor_id, ActorHandle { doc: handle });
 
                 if tx_spawn
                     .unbounded_send(SpawnedActor {
