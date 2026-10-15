@@ -38,23 +38,16 @@ pub struct DocHandle {
 pub(crate) enum DocTaskDispatcher {
     Async(UnboundedSender<ActorTask>),
     #[cfg(feature = "threadpool")]
-    Threadpool(Arc<rayon::ThreadPool>),
+    Threadpool(Arc<crate::doc_runner::threadpool::ThreadpoolActor>),
 }
 
 impl DocTaskDispatcher {
-    fn dispatch(
-        &self,
-        _inner: Arc<Mutex<DocActorInner>>,
-        task: ActorTask,
-    ) -> Result<(), ActorTask> {
+    fn dispatch(&self, task: ActorTask) -> Result<(), ActorTask> {
         match self {
             DocTaskDispatcher::Async(tx) => tx.unbounded_send(task),
             #[cfg(feature = "threadpool")]
-            DocTaskDispatcher::Threadpool(threadpool) => {
-                threadpool.spawn(move || {
-                    let mut guard = _inner.lock().unwrap();
-                    guard.handle_task(task);
-                });
+            DocTaskDispatcher::Threadpool(actor) => {
+                actor.dispatch(task);
                 Ok(())
             }
         }
@@ -80,6 +73,11 @@ impl DocHandle {
             inner,
             task_dispatcher,
         }
+    }
+
+    #[cfg(feature = "threadpool")]
+    pub(crate) fn dispatch_task(&self, task: ActorTask) {
+        let _ = self.task_dispatcher.dispatch(task);
     }
 
     /// The ID of this document
@@ -114,8 +112,11 @@ impl DocHandle {
     /// Make a change to the underlying `automerge::Automerge` document without
     /// blocking the calling task.
     ///
-    /// This queues the work on the document actor and resolves when the actor
-    /// has applied the change. If you created this repo using
+    /// When polled, this queues the work on the document actor and resolves when
+    /// the actor has applied the change. Queued tasks are processed in submission
+    /// order in both async and threadpool modes. Synchronous [`Self::with_document`]
+    /// calls acquire the document directly and do not participate in that ordering.
+    /// If you created this repo using
     /// [`ConcurrencyConfig::ThreadPool`] then the closure runs on the
     /// threadpool and doesn't block the current async task. Otherwise, the
     /// closure runs in the document actor task, so long-running closures can
@@ -129,7 +130,6 @@ impl DocHandle {
         F: FnOnce(&mut Automerge) -> R + Send + 'static,
         R: Send + 'static,
     {
-        let inner = self.inner.clone();
         let dispatcher = self.task_dispatcher.clone();
         async move {
             let (tx, rx) = oneshot::channel();
@@ -137,7 +137,7 @@ impl DocHandle {
                 let result = inner.with_document(f);
                 let _ = tx.send(result);
             }));
-            dispatcher.dispatch(inner, task).map_err(|_| Stopped)?;
+            dispatcher.dispatch(task).map_err(|_| Stopped)?;
             rx.await.map_err(|_| Stopped)
         }
     }

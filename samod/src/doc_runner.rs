@@ -1,3 +1,6 @@
+#[cfg(feature = "threadpool")]
+pub(crate) mod threadpool;
+
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
