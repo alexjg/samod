@@ -202,7 +202,7 @@ impl State {
                             },
                         )
                     } else {
-                        (HashMap::new(), ConnectionState::Handshaking)
+                        (Default::default(), ConnectionState::Handshaking)
                     };
                 ConnectionInfo {
                     id: *conn_id,

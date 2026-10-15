@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Breaking Changes
+
+* `samod_core::network::ConnectionInfo::docs` is now an
+  `Arc<HashMap<DocumentId, PeerDocState>>`, so that connection info snapshots
+  are cheap to produce. `samod::ConnectionInfo` is unchanged.
+
 ## 0.15.0 - 2026-09-30
 
 ### Breaking Changes
