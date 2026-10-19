@@ -397,6 +397,10 @@ impl SamodWrapper {
         self.storage.data()
     }
 
+    pub fn storage_puts(&self) -> &[StorageKey] {
+        self.storage.puts()
+    }
+
     pub fn push_event(&mut self, event: HubEvent) {
         self.inbox.push_back(event);
     }

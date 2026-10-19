@@ -39,9 +39,13 @@ impl OnDiskState {
         }
     }
 
-    /// Add keys that we know are now on disk
-    pub(super) fn add_keys<I: Iterator<Item = StorageKey>>(&mut self, contents: I) {
+    pub(super) fn add_loaded<I: Iterator<Item = StorageKey>>(
+        &mut self,
+        contents: I,
+        heads: Vec<automerge::ChangeHash>,
+    ) {
         self.on_disk.extend(contents);
+        self.last_saved_heads = Some(heads);
     }
 
     pub(super) fn save_new_changes(

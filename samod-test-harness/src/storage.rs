@@ -9,6 +9,7 @@ pub struct Storage {
     data: HashMap<StorageKey, Vec<u8>>,
     state: StorageState,
     completed_tasks: HashMap<IoTaskId, StorageResult>,
+    puts: Vec<StorageKey>,
 }
 
 enum StorageState {
@@ -24,6 +25,7 @@ impl From<HashMap<StorageKey, Vec<u8>>> for Storage {
             data: map,
             state: StorageState::Running,
             completed_tasks: HashMap::new(),
+            puts: Vec::new(),
         }
     }
 }
@@ -34,11 +36,16 @@ impl Storage {
             data: HashMap::new(),
             state: StorageState::Running,
             completed_tasks: HashMap::new(),
+            puts: Vec::new(),
         }
     }
 
     pub(crate) fn data(&self) -> &HashMap<StorageKey, Vec<u8>> {
         &self.data
+    }
+
+    pub(crate) fn puts(&self) -> &[StorageKey] {
+        &self.puts
     }
 
     pub(crate) fn pause(&mut self) {
@@ -87,7 +94,8 @@ impl Storage {
                 StorageResult::LoadRange { values }
             }
             StorageTask::Put { key, value } => {
-                self.data.insert(key.clone(), value);
+                self.puts.push(key.clone());
+                self.data.insert(key, value);
                 StorageResult::Put
             }
             StorageTask::Delete { key } => {
