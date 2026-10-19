@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+* Documents with many incremental files load much faster
+
 ## 0.16.0 - 2026-10-23
 
 The headline change here is that `AnnouncePolicy` has been replaced with

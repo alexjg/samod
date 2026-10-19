@@ -4,7 +4,7 @@ mod tests;
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
-use automerge::{Automerge, ChangeHash};
+use automerge::{Automerge, Change, ChangeHash};
 
 use super::SpawnArgs;
 // use super::driver::Driver;
@@ -593,9 +593,21 @@ impl DocumentActor {
                 tracing::warn!(err=?e, %key, "error loading snapshot chunk");
             }
         }
+        let mut changes = Vec::new();
         for (key, incremental) in incrementals {
-            if let Err(e) = self.doc.load_incremental(incremental) {
-                tracing::warn!(err=?e, %key, "error loading incremental chunk");
+            match Change::load_all(incremental) {
+                Ok(parsed) => changes.extend(parsed),
+                Err(e) => tracing::warn!(err=?e, %key, "error loading incremental chunk"),
+            }
+        }
+        if let Err(e) = self.doc.apply_changes(changes) {
+            tracing::warn!(err=?e, "error applying changes together, applying them one file at a time");
+            for (key, incremental) in incrementals {
+                if let Ok(parsed) = Change::load_all(incremental)
+                    && let Err(e) = self.doc.apply_changes(parsed)
+                {
+                    tracing::warn!(err=?e, %key, "error applying incremental chunk");
+                }
             }
         }
 
