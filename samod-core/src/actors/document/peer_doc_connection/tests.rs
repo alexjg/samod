@@ -145,3 +145,101 @@ fn only_the_first_message_of_a_request_batch_initiates_a_request() {
     };
     assert_eq!(sync::Message::decode(data).unwrap().heads, doc.get_heads());
 }
+
+fn read_write_connection() -> PeerDocConnection {
+    let mut conn = connection();
+    conn.set_share_config(ShareConfig::read_write());
+    conn
+}
+
+fn edit(doc: &mut Automerge, key: &str) {
+    use automerge::{ROOT, transaction::Transactable};
+    let mut tx = doc.transaction();
+    tx.put(ROOT, key, 1).unwrap();
+    tx.commit();
+}
+
+fn settle(
+    a: &mut Automerge,
+    ac: &mut PeerDocConnection,
+    b: &mut Automerge,
+    bc: &mut PeerDocConnection,
+) {
+    let now = UnixTimestamp::now();
+    for _ in 0..20 {
+        let mut idle = true;
+        for (m, _) in ac.generate_sync_messages(now, a) {
+            bc.receive_sync_message(now, b, m).unwrap();
+            idle = false;
+        }
+        for (m, _) in bc.generate_sync_messages(now, b) {
+            ac.receive_sync_message(now, a, m).unwrap();
+            idle = false;
+        }
+        if idle {
+            return;
+        }
+    }
+    panic!("did not settle");
+}
+
+#[test]
+fn quiet_connection_does_not_ask_automerge() {
+    let mut a = Automerge::new();
+    let mut b = Automerge::new();
+    edit(&mut a, "x");
+    let (mut ac, mut bc) = (read_write_connection(), read_write_connection());
+    settle(&mut a, &mut ac, &mut b, &mut bc);
+
+    let now = UnixTimestamp::now();
+    let (a_before, b_before) = (ac.generate_calls, bc.generate_calls);
+    for _ in 0..100 {
+        assert!(ac.generate_sync_messages(now, &a).is_empty());
+        assert!(bc.generate_sync_messages(now, &b).is_empty());
+    }
+    assert_eq!(ac.generate_calls, a_before);
+    assert_eq!(bc.generate_calls, b_before);
+}
+
+#[test]
+fn local_change_is_sent_after_quiet() {
+    use automerge::{ROOT, ReadDoc};
+    let mut a = Automerge::new();
+    let mut b = Automerge::new();
+    edit(&mut a, "x");
+    let (mut ac, mut bc) = (read_write_connection(), read_write_connection());
+    settle(&mut a, &mut ac, &mut b, &mut bc);
+
+    edit(&mut a, "y");
+    settle(&mut a, &mut ac, &mut b, &mut bc);
+    assert_eq!(a.get_heads(), b.get_heads());
+    assert!(b.get(ROOT, "y").unwrap().is_some());
+}
+
+#[test]
+fn reset_sync_state_makes_a_message_due() {
+    let mut a = Automerge::new();
+    let mut b = Automerge::new();
+    edit(&mut a, "x");
+    let (mut ac, mut bc) = (read_write_connection(), read_write_connection());
+    settle(&mut a, &mut ac, &mut b, &mut bc);
+
+    let before = ac.generate_calls;
+    ac.reset_sync_state();
+    assert!(!ac.generate_sync_messages(UnixTimestamp::now(), &a).is_empty());
+    assert_eq!(ac.generate_calls, before + 1);
+}
+
+#[test]
+fn share_config_change_makes_a_message_due() {
+    let mut a = Automerge::new();
+    let mut b = Automerge::new();
+    edit(&mut a, "x");
+    let (mut ac, mut bc) = (read_write_connection(), read_write_connection());
+    settle(&mut a, &mut ac, &mut b, &mut bc);
+
+    let before = ac.generate_calls;
+    ac.set_share_config(ShareConfig::read_only());
+    ac.generate_sync_messages(UnixTimestamp::now(), &a);
+    assert!(ac.generate_calls > before);
+}
