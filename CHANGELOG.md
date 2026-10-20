@@ -5,6 +5,7 @@
 ### Fixed
 
 * Idle documents no longer generate sync messages on every step
+* A sync message that fails to apply no longer leaves peers out of sync
 
 ## 0.16.0 - 2026-10-23
 

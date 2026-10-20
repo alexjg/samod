@@ -4,7 +4,7 @@ mod tests;
 use std::time::{Duration, Instant};
 
 use automerge::{
-    Automerge, AutomergeError,
+    Automerge, AutomergeError, ChangeHash,
     sync::{self, SyncDoc},
 };
 
@@ -30,7 +30,16 @@ pub(crate) struct PeerDocConnection {
     last_share_config: Option<ShareConfig>,
     // Preserve message ordering while the asynchronous policy lookup is pending.
     pub(super) pending_sync_messages: Vec<(SyncMessage, UnixTimestamp)>,
+    peer_heads: Option<Vec<ChangeHash>>,
+    // Where the sync state last started over after a message failed: our
+    // heads and the peer's. Once the state is fresh, whether a message
+    // applies depends only on the two documents, so a second failure at the
+    // same point would only fail again.
+    failed_at: Option<FailurePoint>,
+    holding: bool,
 }
+
+type FailurePoint = (Vec<ChangeHash>, Option<Vec<ChangeHash>>);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SharePolicyState {
@@ -55,6 +64,9 @@ impl PeerDocConnection {
             share_policy: SharePolicyState::Unknown,
             last_share_config: None,
             pending_sync_messages: Vec::new(),
+            peer_heads: None,
+            failed_at: None,
+            holding: false,
         }
     }
 
@@ -65,6 +77,8 @@ impl PeerDocConnection {
             sync::State::new_read_only()
         };
         self.sync_due = true;
+        self.failed_at = None;
+        self.holding = false;
     }
 
     pub(super) fn prepare_request(&mut self) {
@@ -81,6 +95,7 @@ impl PeerDocConnection {
             self.dirty = true;
         }
         self.sync_due = true;
+        self.forget_failures();
     }
 
     pub(super) fn mark_requested(&mut self) {
@@ -98,8 +113,20 @@ impl PeerDocConnection {
         msg: sync::Message,
     ) -> Result<Duration, AutomergeError> {
         let start = Instant::now();
-        doc.receive_sync_message(&mut self.sync_state, msg)?;
+        let heads = msg.heads.clone();
+        self.peer_heads = Some(heads.clone());
+        if let Err(e) = doc.receive_sync_message(&mut self.sync_state, msg) {
+            self.lost_message(doc);
+            return Err(e);
+        }
         let duration = start.elapsed();
+        if heads
+            .iter()
+            .all(|h| doc.get_change_meta_by_hash(h).is_some())
+        {
+            self.failed_at = None;
+            self.holding = false;
+        }
         self.dirty = true;
         self.sync_due = true;
         self.state.last_received = Some(now);
@@ -110,12 +137,59 @@ impl PeerDocConnection {
         Ok(duration)
     }
 
+    /// A message from the peer failed to decode or apply. Start the sync
+    /// state over, once for each pair of document states it fails at.
+    pub(super) fn lost_message(&mut self, doc: &Automerge) {
+        let point = self.failure_point(doc);
+        if self.failed_at.as_ref() == Some(&point) {
+            self.holding = true;
+            return;
+        }
+        self.start_over();
+        self.failed_at = Some(point);
+    }
+
+    fn failure_point(&self, doc: &Automerge) -> FailurePoint {
+        (doc.get_heads(), self.peer_heads.clone())
+    }
+
+    /// Something outside the two documents changed, so a failure may not
+    /// repeat: any document states may be tried again.
+    fn forget_failures(&mut self) {
+        self.failed_at = None;
+        if self.holding {
+            self.start_over();
+        }
+    }
+
+    fn start_over(&mut self) {
+        self.holding = false;
+        self.failed_at = None;
+        let old = std::mem::take(&mut self.sync_state);
+        self.sync_state = sync::State {
+            their_capabilities: old.their_capabilities,
+            read_only: old.read_only,
+            peer_read_only: old.peer_read_only,
+            needs_reset: true,
+            ..sync::State::new()
+        };
+        self.sync_due = true;
+    }
+
     /// Generate messages in wire order, with timing for each message.
     pub(super) fn generate_sync_messages(
         &mut self,
         now: UnixTimestamp,
         doc: &Automerge,
     ) -> Vec<(sync::Message, Duration)> {
+        if self.holding {
+            let point = self.failure_point(doc);
+            if self.failed_at.as_ref() == Some(&point) {
+                return Vec::new();
+            }
+            self.start_over();
+            self.failed_at = Some(point);
+        }
         let heads = doc.get_heads();
         let mut messages = Vec::new();
         if !self.sync_due && self.heads_at_last_generate.as_ref() == Some(&heads) {
@@ -241,6 +315,9 @@ impl PeerDocConnection {
         self.state.share_config = Some(config);
         self.dirty = true;
         self.sync_due = true;
+        if previous != Some(config) {
+            self.forget_failures();
+        }
         previous
     }
 }
