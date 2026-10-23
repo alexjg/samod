@@ -15,6 +15,11 @@ pub fn key_to_path(key: &samod_core::StorageKey) -> std::path::PathBuf {
     result
 }
 
+#[cfg(any(feature = "tokio", feature = "gio"))]
+fn is_temporary(filename: &str) -> bool {
+    filename.starts_with('.')
+}
+
 #[cfg(feature = "tokio")]
 pub mod tokio {
     use std::{
@@ -27,7 +32,7 @@ pub mod tokio {
 
     use crate::storage::Storage;
 
-    use super::key_to_path;
+    use super::{is_temporary, key_to_path};
 
     /// An implementation of [`Storage`] which stores data in the file system and uses the tokio event loop for dispatch
     ///
@@ -99,6 +104,9 @@ pub mod tokio {
                         else {
                             continue; // Skip entries with non-UTF8 names
                         };
+                        if is_temporary(&filename) {
+                            continue;
+                        }
                         let entry_path = entry.path();
                         let Some(entry_meta) = tokio::fs::metadata(&entry_path).await.ok() else {
                             continue;
@@ -156,7 +164,7 @@ pub mod gio {
     use crate::storage::Storage;
     use gio::prelude::*;
 
-    use super::key_to_path;
+    use super::{is_temporary, key_to_path};
 
     /// An implementation of [`Storage`] which stores data in the file system and uses the gio event loop for dispatch
     ///
@@ -261,6 +269,9 @@ pub mod gio {
                             let Some(filename_str) = filename.to_str() else {
                                 continue;
                             };
+                            if is_temporary(filename_str) {
+                                continue;
+                            }
 
                             let child = current_dir.child(&filename);
                             let Ok(next_key_prefix) =
