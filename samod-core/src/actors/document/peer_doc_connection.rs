@@ -21,6 +21,10 @@ pub(crate) struct PeerDocConnection {
     pub(super) has_requested: bool,
     // Whether this state has changed since the last pop
     dirty: bool,
+    sync_due: bool,
+    heads_at_last_generate: Option<Vec<automerge::ChangeHash>>,
+    #[cfg(test)]
+    generate_calls: usize,
     state: PeerDocState,
     pub(super) share_policy: SharePolicyState,
     last_share_config: Option<ShareConfig>,
@@ -44,6 +48,10 @@ impl PeerDocConnection {
             has_requested: false,
             state: PeerDocState::empty(),
             dirty: false,
+            sync_due: true,
+            heads_at_last_generate: None,
+            #[cfg(test)]
+            generate_calls: 0,
             share_policy: SharePolicyState::Unknown,
             last_share_config: None,
             pending_sync_messages: Vec::new(),
@@ -56,6 +64,7 @@ impl PeerDocConnection {
         } else {
             sync::State::new_read_only()
         };
+        self.sync_due = true;
     }
 
     pub(super) fn prepare_request(&mut self) {
@@ -71,12 +80,14 @@ impl PeerDocConnection {
             self.state.peer_read_only = self.sync_state.is_peer_read_only();
             self.dirty = true;
         }
+        self.sync_due = true;
     }
 
     pub(super) fn mark_requested(&mut self) {
         if !self.has_requested {
             self.has_requested = true;
             self.dirty = true; // Mark as dirty since the request status changed
+            self.sync_due = true;
         }
     }
 
@@ -90,6 +101,7 @@ impl PeerDocConnection {
         doc.receive_sync_message(&mut self.sync_state, msg)?;
         let duration = start.elapsed();
         self.dirty = true;
+        self.sync_due = true;
         self.state.last_received = Some(now);
         self.state.last_acked_heads = self.sync_state.their_heads.clone();
         self.state.shared_heads = Some(self.sync_state.shared_heads.clone());
@@ -106,8 +118,17 @@ impl PeerDocConnection {
     ) -> Vec<(sync::Message, Duration)> {
         let heads = doc.get_heads();
         let mut messages = Vec::new();
+        if !self.sync_due && self.heads_at_last_generate.as_ref() == Some(&heads) {
+            return messages;
+        }
+        self.sync_due = false;
+        self.heads_at_last_generate = Some(heads.clone());
         loop {
             let start = Instant::now();
+            #[cfg(test)]
+            {
+                self.generate_calls += 1;
+            }
             let Some(msg) = doc.generate_sync_message(&mut self.sync_state) else {
                 break;
             };
@@ -219,6 +240,7 @@ impl PeerDocConnection {
         }
         self.state.share_config = Some(config);
         self.dirty = true;
+        self.sync_due = true;
         previous
     }
 }

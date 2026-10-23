@@ -83,3 +83,49 @@ fn basic_document_sync_flow() {
         "Bob's document should contain Alice's data (foo -> bar)"
     );
 }
+
+#[test]
+fn local_change_reaches_peer_after_network_went_quiet() {
+    init_logging();
+    let mut network = Network::new();
+    let alice = network.create_samod("Alice");
+    let bob = network.create_samod("Bob");
+    let RunningDocIds { doc_id, actor_id } = network.samod(&alice).create_document();
+    network.connect(alice, bob);
+    network.run_until_quiescent();
+    let bob_actor = network
+        .samod(&bob)
+        .find_document(&doc_id)
+        .expect("Bob should find the document");
+    network.run_until_quiescent();
+
+    for _ in 0..5 {
+        network
+            .samod(&alice)
+            .with_document_by_actor(actor_id, |_| ())
+            .unwrap();
+        network
+            .samod(&bob)
+            .with_document_by_actor(bob_actor, |_| ())
+            .unwrap();
+    }
+    network.run_until_quiescent();
+
+    network
+        .samod(&alice)
+        .with_document_by_actor(actor_id, |doc| {
+            let mut tx = doc.transaction();
+            tx.put(automerge::ROOT, "late", "change").unwrap();
+            tx.commit();
+        })
+        .unwrap();
+    network.run_until_quiescent();
+
+    let got = network
+        .samod(&bob)
+        .with_document_by_actor(bob_actor, |doc| {
+            doc.get(automerge::ROOT, "late").unwrap().is_some()
+        })
+        .unwrap();
+    assert!(got, "Bob should receive Alice's late change");
+}
