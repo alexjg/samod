@@ -403,8 +403,6 @@ impl DocumentActor {
                 }) = self.load_state.take_complete()
                 {
                     self.handle_load(now, out, &snapshots, &incrementals);
-                    self.on_disk_state
-                        .add_keys(snapshots.into_keys().chain(incrementals.into_keys()));
                 }
             }
             ActorInput::Tick => {}
@@ -598,6 +596,10 @@ impl DocumentActor {
                 tracing::warn!(err=?e, %key, "error loading incremental chunk");
             }
         }
+        self.on_disk_state.add_loaded(
+            snapshots.keys().chain(incrementals.keys()).cloned(),
+            self.doc.get_heads(),
+        );
 
         if let Phase::Loading(loading) = &mut self.phase {
             let pending_sync_messages = loading.take_pending_sync_messages();

@@ -114,3 +114,44 @@ fn many_changes_compact_but_do_not_delete_existing_snapshot() {
         .find_document(&doc_id)
         .expect("bob should have the document");
 }
+
+#[test]
+fn loading_a_document_does_not_rewrite_it() {
+    init_logging();
+
+    let mut network = Network::new();
+    let alice = network.create_samod("alice");
+    let RunningDocIds { actor_id, doc_id } = network.samod(&alice).create_document();
+
+    network
+        .samod(&alice)
+        .with_document_by_actor(actor_id, |doc| {
+            for i in 0..20 {
+                doc.transact(|tx| {
+                    tx.put(ROOT, i.to_string(), i)?;
+                    Ok::<_, AutomergeError>(())
+                })
+                .unwrap();
+            }
+        })
+        .unwrap();
+    let storage = network.samod(&alice).storage().clone();
+
+    let alice2 = network.create_samod_with_storage("alice2", storage);
+    let actor = network.samod(&alice2).find_document(&doc_id).unwrap();
+    network
+        .samod(&alice2)
+        .with_document_by_actor(actor, |doc| {
+            doc.transact(|tx| {
+                tx.put(ROOT, "late", 1)?;
+                Ok::<_, AutomergeError>(())
+            })
+            .unwrap();
+        })
+        .unwrap();
+
+    let incremental = StorageKey::incremental_prefix(&doc_id);
+    let puts = network.samod(&alice2).storage_puts().to_vec();
+    assert_eq!(puts.len(), 1, "expected one put, got {puts:?}");
+    assert!(incremental.is_prefix_of(&puts[0]));
+}
