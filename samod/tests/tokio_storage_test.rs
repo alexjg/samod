@@ -201,4 +201,43 @@ mod tokio_tests {
             assert_eq!(loaded, Some(data), "Failed for filename: {filename}");
         }
     }
+
+    #[tokio::test]
+    async fn test_tokio_storage_put_leaves_only_the_key() {
+        init_logging();
+
+        let temp_dir = TempDir::new().unwrap();
+        let storage = TokioFilesystemStorage::new(temp_dir.path());
+
+        let key = StorageKey::from_parts(vec!["test_prefix", "file1"]).unwrap();
+        storage.put(key.clone(), b"old".to_vec()).await;
+        storage.put(key.clone(), b"new".to_vec()).await;
+        assert_eq!(storage.load(key).await, Some(b"new".to_vec()));
+
+        let dir = temp_dir.path().join("te").join("st_prefix");
+        let names: Vec<_> = std::fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .collect();
+        assert_eq!(names, vec!["file1".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn test_tokio_storage_load_range_skips_temporary_files() {
+        init_logging();
+
+        let temp_dir = TempDir::new().unwrap();
+        let storage = TokioFilesystemStorage::new(temp_dir.path());
+
+        let key = StorageKey::from_parts(vec!["test_prefix", "file1"]).unwrap();
+        storage.put(key.clone(), b"data1".to_vec()).await;
+
+        let dir = temp_dir.path().join("te").join("st_prefix");
+        std::fs::write(dir.join(".file2.0123456789abcdef.tmp"), b"da").unwrap();
+
+        let loaded = storage
+            .load_range(StorageKey::from_parts(vec!["test_prefix"]).unwrap())
+            .await;
+        assert_eq!(loaded, HashMap::from([(key, b"data1".to_vec())]));
+    }
 }

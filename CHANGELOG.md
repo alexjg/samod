@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+* `TokioFilesystemStorage` writes files atomically and logs failed writes
+* Filesystem storages ignore their temporary files when loading
+
 ## 0.16.0 - 2026-10-23
 
 The headline change here is that `AnnouncePolicy` has been replaced with

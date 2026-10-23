@@ -151,4 +151,26 @@ mod gio_tests {
             assert_eq!(loaded, Some(data));
         });
     }
+
+    #[test]
+    fn test_gio_storage_load_range_skips_temporary_files() {
+        init_logging();
+
+        let main_context = glib::MainContext::new();
+        main_context.block_on(async {
+            let temp_dir = TempDir::new().unwrap();
+            let storage = GioFilesystemStorage::new(temp_dir.path());
+
+            let key = StorageKey::from_parts(vec!["test_prefix", "file1"]).unwrap();
+            storage.put(key.clone(), b"data1".to_vec()).await;
+
+            let dir = temp_dir.path().join("te").join("st_prefix");
+            std::fs::write(dir.join(".goutputstream-ABC123"), b"da").unwrap();
+
+            let loaded = storage
+                .load_range(StorageKey::from_parts(vec!["test_prefix"]).unwrap())
+                .await;
+            assert_eq!(loaded, HashMap::from([(key, b"data1".to_vec())]));
+        });
+    }
 }
