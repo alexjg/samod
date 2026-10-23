@@ -921,6 +921,44 @@ impl Repo {
         Ok(conn_handle)
     }
 
+    pub fn unload(
+        &self,
+        doc_id: DocumentId,
+    ) -> impl Future<Output = Result<(), Stopped>> + 'static {
+        let (tx, rx) = oneshot::channel();
+        let inner = self.inner.clone();
+        let unloaded_actors = {
+            let mut inner = inner.lock().unwrap();
+            if inner.hub.is_stopped() {
+                return futures::future::Either::Left(futures::future::ready(Err(Stopped)));
+            }
+            let DispatchedCommand { command_id, event } = HubEvent::unload_document(doc_id.clone());
+            inner.pending_commands.insert(command_id, tx);
+            inner.handle_event(event);
+            inner
+                .actors
+                .iter()
+                .filter(|(_, actor)| actor.doc.document_id() == &doc_id)
+                .map(|(actor_id, _)| *actor_id)
+                .collect::<Vec<_>>()
+        };
+        futures::future::Either::Right(async move {
+            rx.await.map_err(|_| Stopped)?;
+            let mut inner = inner.lock().unwrap();
+            for actor_id in unloaded_actors {
+                inner.actors.remove(&actor_id);
+                match &mut inner.doc_runner {
+                    #[cfg(feature = "threadpool")]
+                    DocRunner::Threadpool(_) => {}
+                    DocRunner::Async { task_senders, .. } => {
+                        task_senders.remove(&actor_id);
+                    }
+                }
+            }
+            Ok(())
+        })
+    }
+
     /// Stop the `Samod` instance.
     ///
     /// This will wait until all storage tasks have completed before stopping all

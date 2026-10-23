@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+* `Repo::unload` stops a document's actor and forgets the document
+
 ## 0.16.0 - 2026-10-23
 
 The headline change here is that `AnnouncePolicy` has been replaced with

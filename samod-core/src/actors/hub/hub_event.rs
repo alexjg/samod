@@ -93,6 +93,10 @@ impl HubEvent {
         }
     }
 
+    pub fn unload_document(document_id: DocumentId) -> DispatchedCommand {
+        Self::dispatch_command(Command::UnloadDocument { document_id })
+    }
+
     /// Creates an event indicating that a network connection has been lost externally.
     pub fn connection_lost(connection_id: ConnectionId) -> Self {
         HubEvent {
@@ -241,6 +245,7 @@ impl HubEvent {
                     Command::ActorReady { .. } => "actor_ready",
                     Command::CreateDocument { .. } => "create_document",
                     Command::SearchForDoc { .. } => "search_for_doc",
+                    Command::UnloadDocument { .. } => "unload_document",
                 },
                 HubInput::UpdateSharePolicy { .. } => "update_share_policy",
                 HubInput::Tick => "tick",

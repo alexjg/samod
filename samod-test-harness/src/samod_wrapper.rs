@@ -570,6 +570,18 @@ impl SamodWrapper {
             .pop_doc_changed()
     }
 
+    pub fn unload_document(&mut self, document_id: &DocumentId) {
+        let DispatchedCommand { command_id, event } =
+            HubEvent::unload_document(document_id.clone());
+        self.inbox.push_back(event);
+        self.handle_events();
+        let completed_command = self
+            .completed_commands
+            .remove(&command_id)
+            .expect("The unload document command never completed");
+        assert_eq!(completed_command, CommandResult::UnloadDocument);
+    }
+
     pub fn stop(&mut self) {
         self.inbox.push_back(HubEvent::stop());
         self.handle_events();

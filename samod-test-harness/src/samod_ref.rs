@@ -233,6 +233,10 @@ impl SamodRef<'_> {
         self.wrapper().pop_doc_changed(actor_id)
     }
 
+    pub fn unload_document(&mut self, doc_id: &DocumentId) {
+        self.wrapper().unload_document(doc_id);
+    }
+
     pub fn stop(&mut self) {
         self.wrapper().stop();
     }
