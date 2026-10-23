@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+* `CompactionPolicy`, set with `RepoBuilder::with_compaction_policy`
+
+### Changed
+
+* Documents are compacted by size rather than by change count
+
+### Fixed
+
+* Loading a document no longer saves its loaded history again
+
 ## 0.16.0 - 2026-10-23
 
 The headline change here is that `AnnouncePolicy` has been replaced with

@@ -1,5 +1,5 @@
 use crate::{
-    PeerId, StorageId, StorageKey, UnixTimestamp,
+    CompactionPolicy, PeerId, StorageId, StorageKey, UnixTimestamp,
     actors::hub::{Hub, State as HubState},
     ephemera::EphemeralSession,
     io::{IoResult, IoTask, IoTaskId, StorageResult, StorageTask},
@@ -39,6 +39,7 @@ use crate::{
 /// ```
 pub struct SamodLoader {
     local_peer_id: PeerId,
+    compaction_policy: CompactionPolicy,
     state: State,
 }
 
@@ -75,8 +76,24 @@ impl SamodLoader {
     pub fn new(local_peer_id: PeerId) -> Self {
         Self {
             local_peer_id,
+            compaction_policy: CompactionPolicy::default(),
             state: State::Starting,
         }
+    }
+
+    /// Sets the [`CompactionPolicy`].
+    ///
+    /// # Panics
+    ///
+    /// If `policy.incremental_fraction` is negative or NaN.
+    pub fn with_compaction_policy(mut self, policy: CompactionPolicy) -> Self {
+        assert!(
+            policy.incremental_fraction >= 0.0,
+            "CompactionPolicy::incremental_fraction must be non-negative, got {}",
+            policy.incremental_fraction
+        );
+        self.compaction_policy = policy;
+        self
     }
 
     /// Advances the loader state machine.
@@ -112,6 +129,7 @@ impl SamodLoader {
                                 storage_id,
                                 self.local_peer_id.clone(),
                                 EphemeralSession::new(rng),
+                                self.compaction_policy,
                             );
                             return LoaderState::Loaded(Box::new(Hub::new(state)));
                         }
@@ -136,6 +154,7 @@ impl SamodLoader {
                     storage_id.clone(),
                     self.local_peer_id.clone(),
                     EphemeralSession::new(rng),
+                    self.compaction_policy,
                 );
                 LoaderState::Loaded(Box::new(Hub::new(state)))
             }

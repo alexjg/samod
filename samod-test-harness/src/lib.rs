@@ -1,7 +1,7 @@
 use std::collections::{HashMap, VecDeque};
 
 use samod_core::{
-    ConnectionId, PeerId, StorageKey,
+    CompactionPolicy, ConnectionId, PeerId, StorageKey,
     actors::hub::{DispatchedCommand, HubEvent},
 };
 
@@ -50,6 +50,22 @@ impl Network {
 
     pub fn create_samod<S: AsRef<str>>(&mut self, nickname: S) -> SamodId {
         let samod = SamodWrapper::new(nickname.as_ref().to_string());
+        let id = SamodId::new();
+        self.samods.insert(id, samod);
+        self.run_until_quiescent();
+        id
+    }
+
+    pub fn create_samod_with_compaction<S: AsRef<str>>(
+        &mut self,
+        nickname: S,
+        policy: CompactionPolicy,
+    ) -> SamodId {
+        let samod = SamodWrapper::new_with_compaction(
+            nickname.as_ref().to_string(),
+            Storage::new(),
+            policy,
+        );
         let id = SamodId::new();
         self.samods.insert(id, samod);
         self.run_until_quiescent();

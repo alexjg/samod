@@ -27,6 +27,10 @@ impl SamodRef<'_> {
         self.wrapper().storage()
     }
 
+    pub fn storage_puts(&mut self) -> &[samod_core::StorageKey] {
+        self.wrapper().storage_puts()
+    }
+
     pub fn actor_count(&mut self) -> usize {
         self.wrapper().actor_count()
     }

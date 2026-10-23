@@ -74,6 +74,7 @@ impl DocumentActor {
             document_id,
             initial_content,
             initial_connections,
+            compaction_policy,
         }: SpawnArgs,
     ) -> (Self, DocActorResult) {
         let mut out = DocActorResult::default();
@@ -95,7 +96,7 @@ impl DocumentActor {
             id: actor_id,
             load_state,
             check_policy_tasks: HashMap::new(),
-            on_disk_state: OnDiskState::new(),
+            on_disk_state: OnDiskState::new(compaction_policy),
             peer_connections: HashMap::new(),
             run_state: RunState::Running,
             phase,
@@ -403,8 +404,6 @@ impl DocumentActor {
                 }) = self.load_state.take_complete()
                 {
                     self.handle_load(now, out, &snapshots, &incrementals);
-                    self.on_disk_state
-                        .add_keys(snapshots.into_keys().chain(incrementals.into_keys()));
                 }
             }
             ActorInput::Tick => {}
@@ -598,6 +597,8 @@ impl DocumentActor {
                 tracing::warn!(err=?e, %key, "error loading incremental chunk");
             }
         }
+        self.on_disk_state
+            .add_loaded(snapshots, incrementals, self.doc.get_heads());
 
         if let Phase::Loading(loading) = &mut self.phase {
             let pending_sync_messages = loading.take_pending_sync_messages();

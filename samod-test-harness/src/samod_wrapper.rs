@@ -6,8 +6,8 @@ use std::{
 use automerge::Automerge;
 use rand::SeedableRng;
 use samod_core::{
-    CommandId, CommandResult, ConnectionId, DialerId, DocSearch, DocumentActorId, DocumentChanged,
-    DocumentId, ListenerId, PeerId, StorageId, StorageKey, UnixTimestamp,
+    CommandId, CommandResult, CompactionPolicy, ConnectionId, DialerId, DocSearch, DocumentActorId,
+    DocumentChanged, DocumentId, ListenerId, PeerId, StorageId, StorageKey, UnixTimestamp,
     actors::{
         DocumentActor, DocumentError,
         hub::{
@@ -52,9 +52,18 @@ impl SamodWrapper {
         Self::new_with_storage(nickname, Storage::new())
     }
 
-    pub fn new_with_storage(nickname: String, mut storage: Storage) -> Self {
+    pub fn new_with_storage(nickname: String, storage: Storage) -> Self {
+        Self::new_with_compaction(nickname, storage, CompactionPolicy::default())
+    }
+
+    pub fn new_with_compaction(
+        nickname: String,
+        mut storage: Storage,
+        compaction_policy: CompactionPolicy,
+    ) -> Self {
         let peer_id = PeerId::from_string(nickname.clone());
-        let mut loader = samod_core::SamodLoader::new(peer_id);
+        let mut loader =
+            samod_core::SamodLoader::new(peer_id).with_compaction_policy(compaction_policy);
         let now = UnixTimestamp::now();
 
         let mut rng = rand::rngs::StdRng::from_os_rng();
@@ -395,6 +404,10 @@ impl SamodWrapper {
 
     pub fn storage(&self) -> &HashMap<StorageKey, Vec<u8>> {
         self.storage.data()
+    }
+
+    pub fn storage_puts(&self) -> &[StorageKey] {
+        self.storage.puts()
     }
 
     pub fn push_event(&mut self, event: HubEvent) {
