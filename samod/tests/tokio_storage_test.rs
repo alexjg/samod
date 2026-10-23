@@ -201,4 +201,23 @@ mod tokio_tests {
             assert_eq!(loaded, Some(data), "Failed for filename: {filename}");
         }
     }
+
+    #[tokio::test]
+    async fn test_tokio_storage_load_range_skips_temporary_files() {
+        init_logging();
+
+        let temp_dir = TempDir::new().unwrap();
+        let storage = TokioFilesystemStorage::new(temp_dir.path());
+
+        let key = StorageKey::from_parts(vec!["test_prefix", "file1"]).unwrap();
+        storage.put(key.clone(), b"data1".to_vec()).await;
+
+        let dir = temp_dir.path().join("te").join("st_prefix");
+        std::fs::write(dir.join(".file2.0123456789abcdef.tmp"), b"da").unwrap();
+
+        let loaded = storage
+            .load_range(StorageKey::from_parts(vec!["test_prefix"]).unwrap())
+            .await;
+        assert_eq!(loaded, HashMap::from([(key, b"data1".to_vec())]));
+    }
 }
