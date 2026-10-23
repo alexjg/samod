@@ -136,12 +136,17 @@ pub mod tokio {
         ) -> impl Future<Output = ()> + Send {
             let path = self.key_to_path(&key);
             async move {
-                if let Some(parent) = path.parent()
-                    && tokio::fs::create_dir_all(parent).await.is_err()
-                {
-                    return;
+                let result = tokio::task::spawn_blocking(move || {
+                    write_atomically(&path, &data).map_err(|e| (path, e))
+                })
+                .await;
+                match result {
+                    Ok(Ok(())) => {}
+                    Ok(Err((path, err))) => {
+                        tracing::warn!(%err, path=%path.display(), "failed to write file");
+                    }
+                    Err(err) => tracing::warn!(%err, "file write task failed"),
                 }
-                let _ = tokio::fs::write(path, data).await;
             }
         }
 
@@ -151,6 +156,30 @@ pub mod tokio {
                 let _ = tokio::fs::remove_file(path).await;
             }
         }
+    }
+
+    fn write_atomically(path: &Path, data: &[u8]) -> std::io::Result<()> {
+        use std::io::Write;
+
+        let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
+            return Err(std::io::Error::other("storage path has no file name"));
+        };
+        std::fs::create_dir_all(parent)?;
+        let temp = parent.join(format!(
+            ".{}.{:016x}.tmp",
+            name.to_string_lossy(),
+            rand::random::<u64>()
+        ));
+        let result = (|| {
+            let mut file = std::fs::File::create(&temp)?;
+            file.write_all(data)?;
+            file.sync_all()?;
+            std::fs::rename(&temp, path)
+        })();
+        if result.is_err() {
+            let _ = std::fs::remove_file(&temp);
+        }
+        result
     }
 }
 
