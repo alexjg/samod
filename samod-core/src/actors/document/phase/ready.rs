@@ -28,6 +28,7 @@ impl Ready {
                     Ok(m) => m,
                     Err(e) => {
                         tracing::warn!(err=?e, conn_id=?conn.connection_id, "failed to decode sync message");
+                        conn.lost_message(doc);
                         return None;
                     }
                 };
