@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+* Stopping a repo ends its pending `Repo::search` streams, `Repo::find`s and
+  `Repo::when_connected`s with `Stopped` instead of leaving them waiting
+
 ## 0.16.0 - 2026-10-23
 
 The headline change here is that `AnnouncePolicy` has been replaced with

@@ -1247,6 +1247,8 @@ impl Inner {
         }
 
         if stopped {
+            self.search_state_streams.clear();
+            self.waiting_for_connection.clear();
             for waiter in self.stop_waiters.drain(..) {
                 let _ = waiter.send(());
             }

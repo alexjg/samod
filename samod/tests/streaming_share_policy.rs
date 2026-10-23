@@ -542,3 +542,51 @@ async fn identical_items_do_not_pause_sharing() {
     .await
     .unwrap();
 }
+
+#[tokio::test]
+async fn stopping_ends_a_pending_find() {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        let (publisher, reader, doc, mut subscriptions) = pair().await;
+        connect(&reader, &publisher).await;
+        let _subscription = subscriptions.next().await.unwrap();
+        let (initial, _updates) = reader.search(doc.document_id().clone()).unwrap();
+        assert!(!matches!(initial, SearchState::Found(_)));
+        let found = tokio::spawn(reader.find(doc.document_id().clone()));
+        tokio::task::yield_now().await;
+        reader.stop().await;
+        assert!(found.await.unwrap().is_err());
+        publisher.stop().await;
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn stopping_ends_a_pending_search_stream() {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        let (publisher, reader, doc, mut subscriptions) = pair().await;
+        connect(&reader, &publisher).await;
+        let _subscription = subscriptions.next().await.unwrap();
+        let (_, mut updates) = reader.search(doc.document_id().clone()).unwrap();
+        reader.stop().await;
+        while let Some(state) = updates.next().await {
+            assert!(!matches!(state, SearchState::Found(_)));
+        }
+        publisher.stop().await;
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn stopping_ends_a_pending_when_connected() {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        let repo = Repo::build_tokio().load().await;
+        let connected = tokio::spawn(repo.when_connected("nobody".into()));
+        tokio::task::yield_now().await;
+        repo.stop().await;
+        assert!(connected.await.unwrap().is_err());
+    })
+    .await
+    .unwrap();
+}
